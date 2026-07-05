@@ -97,6 +97,21 @@ turn-complete (and `… clear` on prompt-submit, if the harness exposes it).
 This applies to CLI harnesses running **inside tmux**; a GUI IDE not in a tmux
 pane is out of scope.
 
+## Any long-running command (generic)
+
+Not just AI — get nudged when *any* foreground command finishes (builds, tests,
+`ssh`, scripts). Enable the shell integration in `~/.zshrc` or `~/.bashrc`:
+
+```sh
+eval "$(/path/to/tmux-nudge/bin/nudge shell-init)"
+# or: source /path/to/tmux-nudge/shell/nudge.sh
+```
+
+When a command runs longer than `$NUDGE_MIN_SECONDS` (default 15) it nudges its
+pane on completion — **success → done (green), failure → error (red)** — but
+only if you've **switched away** from that pane (`--if-away`), so it never nags
+a pane you're watching. Focus the pane to clear it.
+
 ### Feasibility spikes
 
 The throwaway demos that proved each layer live:

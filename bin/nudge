@@ -81,15 +81,25 @@ cmd_init() {
 }
 
 cmd_on() {
-  local pane="" state="needs-input"
+  local pane="" state="needs-input" if_away=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -t) pane="$2"; shift 2 ;;
       -s|--state) state="$2"; shift 2 ;;
+      --if-away) if_away=1; shift ;;
       *) shift ;;
     esac
   done
   [ -n "$pane" ] || pane="$(tmux display-message -p '#{pane_id}')"
+
+  # --if-away: skip if the pane is currently on-screen (active pane of the
+  # current window of an attached session) — don't nag a pane you're watching.
+  if [ "$if_away" = 1 ]; then
+    local viewed
+    viewed="$(tmux display-message -p -t "$pane" \
+      '#{&&:#{&&:#{pane_active},#{window_active}},#{session_attached}}' 2>/dev/null || echo 0)"
+    [ "$viewed" = 1 ] && return 0
+  fi
 
   tmux set -p -t "$pane" @nudge_state "$state"
   tmux set -p -t "$pane" @nudge_color "$(color_for_state "$state")"
@@ -242,6 +252,12 @@ notify = ["$SELF", "hook", "needs-input"]
 TOML
 }
 
+# Print the line to add to ~/.zshrc or ~/.bashrc to enable the generic
+# "long command finished" trigger for any shell command.
+cmd_shell_init() {
+  echo "source $(dirname "$(dirname "$SELF")")/shell/nudge.sh"
+}
+
 main() {
   local cmd="${1:-help}"; shift 2>/dev/null || true
   case "$cmd" in
@@ -254,7 +270,8 @@ main() {
     hook)          cmd_hook "$@" ;;
     claude-config) cmd_claude_config ;;
     codex-config)  cmd_codex_config ;;
-    *) echo "usage: nudge {init | on [-t pane] [-s state] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config}" ;;
+    shell-init)    cmd_shell_init ;;
+    *) echo "usage: nudge {init | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config | shell-init}" ;;
   esac
 }
 main "$@"
