@@ -35,14 +35,40 @@ static colour, and scoped to the individual pane that needs you.
 
 ## Status
 
-Early. Validating the core feasibility question first: can tmux animate a single
-pane's border smoothly and independently? See [`experiments/blink-spike.sh`](experiments/blink-spike.sh).
+Feasibility proven and the **engine core** is implemented ([`bin/nudge`](bin/nudge)):
+per-pane state, a pulse daemon (auto starts/stops), the layered renderer, and
+auto-clear when you focus a pane. Trigger integrations (Claude Code hook, generic
+shell/idle) are next.
+
+### Try it live (isolated — won't touch your real session)
 
 ```sh
-# from inside tmux:
-experiments/blink-spike.sh        # opens a demo window; watch the left border pulse
-experiments/blink-spike.sh 0.3    # faster pulse
+# from a PLAIN terminal (not inside tmux):
+experiments/try-engine.sh
+# … watch the left pane border pulse + labels; C-b d to detach, then:
+tmux -L nudgedemo kill-server
 ```
+
+### CLI
+
+```sh
+nudge init                      # install formats + hooks (done by nudge.tmux)
+nudge on  [-t pane] [-s state]  # state: needs-input | done | error
+nudge off [-t pane]
+nudge status
+```
+
+### As a plugin (TPM)
+
+```tmux
+set -g @plugin 'bmohan01/tmux-nudge'
+```
+
+### Feasibility spikes
+
+The throwaway demos that proved each layer live:
+[`experiments/blink-spike.sh`](experiments/blink-spike.sh) (border pulse) and
+[`experiments/label-spike.sh`](experiments/label-spike.sh) (single-pane label).
 
 ## License
 

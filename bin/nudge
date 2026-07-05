@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+#
+# nudge — core CLI for tmux-nudge.
+#
+# Marks a pane as "needing a human" and renders a layered attention signal:
+#   Layer A  per-pane border colour pulse   (driven explicitly by the daemon)
+#   Layer B  per-pane border label line     (declarative, via pane-border-format)
+# A pane is cleared automatically when you focus it.
+#
+# Commands:
+#   nudge init                       install global formats + hooks (idempotent)
+#   nudge on   [-t pane] [-s state]  mark a pane (state: needs-input|done|error)
+#   nudge off  [-t pane]             clear a pane
+#   nudge daemon [-i seconds]        the pulse loop (singleton; auto-exits when idle)
+#   nudge status                     list currently-nudging panes
+#
+set -euo pipefail
+
+# Talk to a specific server if NUDGE_SOCKET is set (handy for isolated testing);
+# otherwise use the default server.
+tmux() {
+  if [ -n "${NUDGE_SOCKET:-}" ]; then command tmux -L "$NUDGE_SOCKET" "$@"
+  else command tmux "$@"; fi
+}
+
+# Resolve absolute path to this script so hooks/daemon can re-invoke it.
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+DIM="${NUDGE_DIM:-colour238}"
+
+color_for_state() {
+  case "$1" in
+    needs-input) echo "${NUDGE_COLOR_NEEDS_INPUT:-colour214}" ;;  # orange
+    done)        echo "${NUDGE_COLOR_DONE:-colour46}" ;;          # green
+    error)       echo "${NUDGE_COLOR_ERROR:-colour196}" ;;        # red
+    *)           echo "colour214" ;;
+  esac
+}
+
+label_for_state() {
+  case "$1" in
+    needs-input) echo "● tmux-nudge — needs you" ;;
+    done)        echo "✓ tmux-nudge — done" ;;
+    error)       echo "✗ tmux-nudge — error" ;;
+    *)           echo "● tmux-nudge" ;;
+  esac
+}
+
+server_pidfile() {
+  echo "${TMPDIR:-/tmp}/tmux-nudge-$(tmux display-message -p '#{pid}').pid"
+}
+
+active_count() {
+  tmux list-panes -a -F '#{@nudge_state}' 2>/dev/null | grep -c . || true
+}
+
+# ---- commands -------------------------------------------------------------
+
+cmd_init() {
+  tmux set -g @nudge_phase 0
+  tmux set -g focus-events on
+
+  # Layer B: per-pane border label. Declarative — recomputes on every redraw,
+  # so the daemon only needs to flip @nudge_phase to animate it.
+  # When a pane has no @nudge_state, fall back to a normal title.
+  local fmt
+  fmt='#{?#{@nudge_state},'
+  fmt+='#{?#{==:#{@nudge_phase},1},#[fg=#{@nudge_color}]#[bold]#{@nudge_label},#[fg='"$DIM"']#{@nudge_label}}'
+  fmt+=',#{pane_index} #{pane_title}}'
+  tmux set -g pane-border-format "$fmt"
+
+  # Auto-clear a pane when you switch to it. This tmux build has no per-pane
+  # focus hook, so we use after-select-pane / after-select-window — both fire
+  # with the now-active pane in context. Appended (-a) so we coexist with the
+  # user's own hooks; socket baked in so the hook targets the right server.
+  local hookenv=""
+  [ -n "${NUDGE_SOCKET:-}" ] && hookenv="NUDGE_SOCKET=$NUDGE_SOCKET "
+  local clear="run-shell -b '${hookenv}\"$SELF\" off -t \"#{pane_id}\"'"
+  tmux set-hook -ga after-select-pane "$clear"
+  tmux set-hook -ga after-select-window "$clear"
+}
+
+cmd_on() {
+  local pane="" state="needs-input"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -t) pane="$2"; shift 2 ;;
+      -s|--state) state="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$pane" ] || pane="$(tmux display-message -p '#{pane_id}')"
+
+  tmux set -p -t "$pane" @nudge_state "$state"
+  tmux set -p -t "$pane" @nudge_color "$(color_for_state "$state")"
+  tmux set -p -t "$pane" @nudge_label "$(label_for_state "$state")"
+
+  # Layer B needs the border label line visible on this pane's window.
+  local win; win="$(tmux display-message -p -t "$pane" '#{window_id}')"
+  tmux set -w -t "$win" pane-border-status top
+
+  ensure_daemon
+  tmux refresh-client 2>/dev/null || true
+}
+
+cmd_off() {
+  local pane=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -t) pane="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$pane" ] || pane="$(tmux display-message -p '#{pane_id}')"
+
+  # Clear state and any Layer-A border override on this pane.
+  tmux set -pu -t "$pane" @nudge_state 2>/dev/null || true
+  tmux set -pu -t "$pane" @nudge_color 2>/dev/null || true
+  tmux set -pu -t "$pane" @nudge_label 2>/dev/null || true
+  tmux set -pu -t "$pane" pane-border-style 2>/dev/null || true
+  tmux set -pu -t "$pane" pane-active-border-style 2>/dev/null || true
+
+  # If nothing else in the window is nudging, reclaim the label row.
+  local win still
+  win="$(tmux display-message -p -t "$pane" '#{window_id}' 2>/dev/null || true)"
+  if [ -n "$win" ]; then
+    still="$(tmux list-panes -t "$win" -F '#{@nudge_state}' 2>/dev/null | grep -c . || true)"
+    [ "${still:-0}" -eq 0 ] && tmux set -wu -t "$win" pane-border-status 2>/dev/null || true
+  fi
+  tmux refresh-client 2>/dev/null || true
+}
+
+cmd_daemon() {
+  local interval="${NUDGE_INTERVAL:-0.5}"
+  while [ $# -gt 0 ]; do case "$1" in -i) interval="$2"; shift 2 ;; *) shift ;; esac; done
+
+  local pf; pf="$(server_pidfile)"
+  echo "$$" > "$pf"
+  trap 'rm -f "$pf" 2>/dev/null || true' EXIT
+
+  local phase=0 pid state color style
+  while :; do
+    [ "$(active_count)" -eq 0 ] && break        # nothing to animate → exit
+    phase=$((1 - phase))
+
+    # Layer A: explicitly drive each active pane's border colour (proven path).
+    while read -r pid state color; do
+      [ -n "${state:-}" ] || continue
+      if [ "$phase" = 1 ]; then style="fg=${color},bold"; else style="fg=${DIM}"; fi
+      tmux set -p -t "$pid" pane-border-style "$style" 2>/dev/null || true
+      tmux set -p -t "$pid" pane-active-border-style "$style" 2>/dev/null || true
+    done < <(tmux list-panes -a -F '#{pane_id} #{@nudge_state} #{@nudge_color}' 2>/dev/null)
+
+    # Layer B: one flag flip animates every label declaratively.
+    tmux set -g @nudge_phase "$phase" 2>/dev/null || break
+
+    # Force a redraw on every attached client.
+    while read -r client; do
+      [ -n "$client" ] && tmux refresh-client -t "$client" 2>/dev/null || true
+    done < <(tmux list-clients -F '#{client_name}' 2>/dev/null)
+
+    sleep "$interval"
+  done
+}
+
+ensure_daemon() {
+  local pf pid; pf="$(server_pidfile)"
+  if [ -f "$pf" ]; then
+    pid="$(cat "$pf" 2>/dev/null || true)"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+  fi
+  nohup "$SELF" daemon >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+}
+
+cmd_status() {
+  tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} [#{pane_id}] #{@nudge_state}' 2>/dev/null \
+    | grep -E ' (needs-input|done|error|running)$' || echo "no active nudges"
+}
+
+main() {
+  local cmd="${1:-help}"; shift 2>/dev/null || true
+  case "$cmd" in
+    init)          cmd_init "$@" ;;
+    on)            cmd_on "$@" ;;
+    off)           cmd_off "$@" ;;
+    daemon)        cmd_daemon "$@" ;;
+    ensure-daemon) ensure_daemon ;;
+    status)        cmd_status "$@" ;;
+    *) echo "usage: nudge {init | on [-t pane] [-s state] | off [-t pane] | daemon [-i sec] | status}" ;;
+  esac
+}
+main "$@"
