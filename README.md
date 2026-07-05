@@ -64,27 +64,38 @@ nudge status
 set -g @plugin 'bmohan01/tmux-nudge'
 ```
 
-### Claude Code integration
+## AI harness integration
 
-Make a Claude agent light up its own pane when it finishes or needs you.
-Add the hooks block to `~/.claude/settings.json` (print it pre-filled with the
-right absolute path):
+Any terminal AI harness that can run a command on a lifecycle event can drive
+tmux-nudge — the integration point is a single, harness-neutral command:
 
 ```sh
-nudge claude-config      # copy the "hooks" object into ~/.claude/settings.json
+nudge hook <needs-input|done|error|clear>
 ```
 
-It wires:
+It finds the agent's pane from `$TMUX_PANE`, ignores any payload the harness
+appends (JSON on stdin or argv), and **never exits non-zero** (a failing Claude
+`Stop` hook would otherwise block Claude). Focusing the pane also auto-clears it.
 
-| Claude event | Fires when | tmux-nudge |
+Adding a harness = pointing its event config at `nudge hook <state>`. No new
+code. Config generators print ready-to-paste snippets with absolute paths:
+
+**Claude Code** — `nudge claude-config` → `~/.claude/settings.json`
+
+| Claude event | Fires when | → |
 | --- | --- | --- |
-| `Stop` | Claude finishes a turn | pane → **needs you** (orange) |
-| `Notification` (`permission_prompt`\|`idle_prompt`) | Claude is blocked/waiting | pane → **needs you** (orange) |
-| `UserPromptSubmit` | you send a prompt | pane cleared |
+| `Stop` | Claude finishes a turn | `needs-input` |
+| `Notification` (`permission_prompt`\|`idle_prompt`) | Claude blocked/waiting | `needs-input` |
+| `UserPromptSubmit` | you send a prompt | `clear` |
 
-The adapter ([`bin/nudge-claude`](bin/nudge-claude)) reads `$TMUX_PANE` to find
-the agent's pane and never exits non-zero (a failing `Stop` hook would block
-Claude). Focusing the pane also clears it automatically.
+**Codex (OpenAI)** — `nudge codex-config` → `~/.codex/config.toml`
+(Codex emits `agent-turn-complete` → `needs-input`; clears on focus.)
+
+**Any other harness** (Kiro CLI, aider, gemini-cli, opencode, …): register a
+shell command / hook that runs `<path>/bin/nudge hook needs-input` on
+turn-complete (and `… clear` on prompt-submit, if the harness exposes it).
+This applies to CLI harnesses running **inside tmux**; a GUI IDE not in a tmux
+pane is out of scope.
 
 ### Feasibility spikes
 

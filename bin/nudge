@@ -178,25 +178,53 @@ cmd_status() {
     | grep -E ' (needs-input|done|error|running)$' || echo "no active nudges"
 }
 
-# Print a ready-to-paste Claude Code hooks block for ~/.claude/settings.json,
-# with this install's absolute adapter path filled in.
+# Universal harness adapter. ANY AI tool (Claude Code, Codex, Kiro CLI, …) that
+# can run a command on a lifecycle event registers this. It resolves the agent's
+# pane from $TMUX_PANE and maps a nudge state; any extra args (a JSON payload the
+# harness appends, e.g. Codex) are ignored. Must NEVER exit non-zero — a Claude
+# `Stop` hook exiting 2 would block Claude from stopping.
+#
+#   nudge hook <needs-input|done|error|clear> [-t pane] [ignored...]
+cmd_hook() {
+  local state="${1:-}"; shift 2>/dev/null || true
+  local pane="${TMUX_PANE:-}"
+  while [ $# -gt 0 ]; do case "$1" in -t) pane="$2"; shift 2 ;; *) shift ;; esac; done
+  [ -n "$pane" ] || exit 0
+  case "$state" in
+    needs-input|done|error) cmd_on  -t "$pane" -s "$state" >/dev/null 2>&1 || true ;;
+    clear|off)              cmd_off -t "$pane"             >/dev/null 2>&1 || true ;;
+  esac
+  exit 0
+}
+
+# Print a ready-to-paste Claude Code hooks block for ~/.claude/settings.json.
 cmd_claude_config() {
-  local adapter; adapter="$(dirname "$SELF")/nudge-claude"
   cat <<JSON
 {
   "hooks": {
     "Stop": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "$adapter needs-input" } ] }
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "$SELF hook needs-input" } ] }
     ],
     "Notification": [
-      { "matcher": "permission_prompt|idle_prompt", "hooks": [ { "type": "command", "command": "$adapter needs-input" } ] }
+      { "matcher": "permission_prompt|idle_prompt", "hooks": [ { "type": "command", "command": "$SELF hook needs-input" } ] }
     ],
     "UserPromptSubmit": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "$adapter clear" } ] }
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "$SELF hook clear" } ] }
     ]
   }
 }
 JSON
+}
+
+# Print a ready-to-paste Codex notify line for ~/.codex/config.toml. Codex only
+# emits agent-turn-complete today, so it maps to "needs-input" (your turn); the
+# nudge clears when you focus the pane. Codex appends the event JSON as an extra
+# arg, which `nudge hook` ignores.
+cmd_codex_config() {
+  cat <<TOML
+# ~/.codex/config.toml
+notify = ["$SELF", "hook", "needs-input"]
+TOML
 }
 
 main() {
@@ -208,8 +236,10 @@ main() {
     daemon)        cmd_daemon "$@" ;;
     ensure-daemon) ensure_daemon ;;
     status)        cmd_status "$@" ;;
+    hook)          cmd_hook "$@" ;;
     claude-config) cmd_claude_config ;;
-    *) echo "usage: nudge {init | on [-t pane] [-s state] | off [-t pane] | daemon [-i sec] | status | claude-config}" ;;
+    codex-config)  cmd_codex_config ;;
+    *) echo "usage: nudge {init | on [-t pane] [-s state] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config}" ;;
   esac
 }
 main "$@"
