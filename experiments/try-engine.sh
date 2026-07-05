@@ -43,4 +43,4 @@ SINGLE="$(T list-panes -t demo:single -F '#{pane_id}' | head -1)"
 
 T select-window -t demo:split
 echo "Attaching… (C-b d to detach, then: tmux -L $NUDGE_SOCKET kill-server)"
-exec T attach -t demo
+exec command tmux -L "$NUDGE_SOCKET" attach -t demo
