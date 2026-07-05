@@ -178,6 +178,27 @@ cmd_status() {
     | grep -E ' (needs-input|done|error|running)$' || echo "no active nudges"
 }
 
+# Print a ready-to-paste Claude Code hooks block for ~/.claude/settings.json,
+# with this install's absolute adapter path filled in.
+cmd_claude_config() {
+  local adapter; adapter="$(dirname "$SELF")/nudge-claude"
+  cat <<JSON
+{
+  "hooks": {
+    "Stop": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "$adapter needs-input" } ] }
+    ],
+    "Notification": [
+      { "matcher": "permission_prompt|idle_prompt", "hooks": [ { "type": "command", "command": "$adapter needs-input" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "$adapter clear" } ] }
+    ]
+  }
+}
+JSON
+}
+
 main() {
   local cmd="${1:-help}"; shift 2>/dev/null || true
   case "$cmd" in
@@ -187,7 +208,8 @@ main() {
     daemon)        cmd_daemon "$@" ;;
     ensure-daemon) ensure_daemon ;;
     status)        cmd_status "$@" ;;
-    *) echo "usage: nudge {init | on [-t pane] [-s state] | off [-t pane] | daemon [-i sec] | status}" ;;
+    claude-config) cmd_claude_config ;;
+    *) echo "usage: nudge {init | on [-t pane] [-s state] | off [-t pane] | daemon [-i sec] | status | claude-config}" ;;
   esac
 }
 main "$@"

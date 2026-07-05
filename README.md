@@ -64,6 +64,28 @@ nudge status
 set -g @plugin 'bmohan01/tmux-nudge'
 ```
 
+### Claude Code integration
+
+Make a Claude agent light up its own pane when it finishes or needs you.
+Add the hooks block to `~/.claude/settings.json` (print it pre-filled with the
+right absolute path):
+
+```sh
+nudge claude-config      # copy the "hooks" object into ~/.claude/settings.json
+```
+
+It wires:
+
+| Claude event | Fires when | tmux-nudge |
+| --- | --- | --- |
+| `Stop` | Claude finishes a turn | pane → **needs you** (orange) |
+| `Notification` (`permission_prompt`\|`idle_prompt`) | Claude is blocked/waiting | pane → **needs you** (orange) |
+| `UserPromptSubmit` | you send a prompt | pane cleared |
+
+The adapter ([`bin/nudge-claude`](bin/nudge-claude)) reads `$TMUX_PANE` to find
+the agent's pane and never exits non-zero (a failing `Stop` hook would block
+Claude). Focusing the pane also clears it automatically.
+
 ### Feasibility spikes
 
 The throwaway demos that proved each layer live:
