@@ -99,6 +99,12 @@ cmd_on() {
   local win; win="$(tmux display-message -p -t "$pane" '#{window_id}')"
   tmux set -w -t "$win" pane-border-status top
 
+  # Layer C: highlight the window's entry in the status list so it's visible
+  # even when this window is not the one you're looking at.
+  local wstyle="fg=$(color_for_state "$state"),bold"
+  tmux set -w -t "$win" window-status-style "$wstyle" 2>/dev/null || true
+  tmux set -w -t "$win" window-status-current-style "$wstyle" 2>/dev/null || true
+
   ensure_daemon
   tmux refresh-client 2>/dev/null || true
 }
@@ -120,12 +126,17 @@ cmd_off() {
   tmux set -pu -t "$pane" pane-border-style 2>/dev/null || true
   tmux set -pu -t "$pane" pane-active-border-style 2>/dev/null || true
 
-  # If nothing else in the window is nudging, reclaim the label row.
+  # If nothing else in the window is nudging, reclaim the label row (Layer B)
+  # and restore the window's status-list style (Layer C).
   local win still
   win="$(tmux display-message -p -t "$pane" '#{window_id}' 2>/dev/null || true)"
   if [ -n "$win" ]; then
     still="$(tmux list-panes -t "$win" -F '#{@nudge_state}' 2>/dev/null | grep -c . || true)"
-    [ "${still:-0}" -eq 0 ] && tmux set -wu -t "$win" pane-border-status 2>/dev/null || true
+    if [ "${still:-0}" -eq 0 ]; then
+      tmux set -wu -t "$win" pane-border-status 2>/dev/null || true
+      tmux set -wu -t "$win" window-status-style 2>/dev/null || true
+      tmux set -wu -t "$win" window-status-current-style 2>/dev/null || true
+    fi
   fi
   tmux refresh-client 2>/dev/null || true
 }
@@ -138,18 +149,22 @@ cmd_daemon() {
   echo "$$" > "$pf"
   trap 'rm -f "$pf" 2>/dev/null || true' EXIT
 
-  local phase=0 pid state color style
+  local phase=0 pid win state color style
   while :; do
     [ "$(active_count)" -eq 0 ] && break        # nothing to animate → exit
     phase=$((1 - phase))
 
-    # Layer A: explicitly drive each active pane's border colour (proven path).
-    while read -r pid state color; do
+    # Drive the colour layers per active pane (Layer A border + Layer C window).
+    while read -r pid win state color; do
       [ -n "${state:-}" ] || continue
       if [ "$phase" = 1 ]; then style="fg=${color},bold"; else style="fg=${DIM}"; fi
+      # Layer A: this pane's border.
       tmux set -p -t "$pid" pane-border-style "$style" 2>/dev/null || true
       tmux set -p -t "$pid" pane-active-border-style "$style" 2>/dev/null || true
-    done < <(tmux list-panes -a -F '#{pane_id} #{@nudge_state} #{@nudge_color}' 2>/dev/null)
+      # Layer C: this pane's window entry in the status list.
+      tmux set -w -t "$win" window-status-style "$style" 2>/dev/null || true
+      tmux set -w -t "$win" window-status-current-style "$style" 2>/dev/null || true
+    done < <(tmux list-panes -a -F '#{pane_id} #{window_id} #{@nudge_state} #{@nudge_color}' 2>/dev/null)
 
     # Layer B: one flag flip animates every label declaratively.
     tmux set -g @nudge_phase "$phase" 2>/dev/null || break
