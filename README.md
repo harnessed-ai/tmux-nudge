@@ -52,11 +52,17 @@ tmux -L nudgedemo kill-server
 ### CLI
 
 ```sh
-nudge init                      # install formats + hooks (done by nudge.tmux)
+nudge init                      # install (done by nudge.tmux); saves your config
+nudge uninstall                 # fully reverse init; restores your config
 nudge on  [-t pane] [-s state]  # state: needs-input | done | error
 nudge off [-t pane]
 nudge status
 ```
+
+`init` is non-destructive: it saves your `pane-border-format` and composes with
+it (non-nudging panes keep your look), and appends its focus hooks. `uninstall`
+restores your format and removes **only** tmux-nudge's own hooks, leaving yours
+intact.
 
 ### As a plugin (TPM)
 

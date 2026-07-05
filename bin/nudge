@@ -60,13 +60,21 @@ cmd_init() {
   tmux set -g @nudge_phase 0
   tmux set -g focus-events on
 
+  # Save the user's original pane-border-format ONCE so non-nudging panes keep
+  # their look (composed via #{E:} below) and it can be restored on uninstall.
+  if [ -z "$(tmux show -gv @nudge_saved_pbf 2>/dev/null || true)" ]; then
+    local orig; orig="$(tmux show -gv pane-border-format 2>/dev/null || true)"
+    [ -n "$orig" ] || orig='#{pane_index} "#{pane_title}"'
+    tmux set -g @nudge_saved_pbf "$orig"
+  fi
+
   # Layer B: per-pane border label. Declarative — recomputes on every redraw,
-  # so the daemon only needs to flip @nudge_phase to animate it.
-  # When a pane has no @nudge_state, fall back to a normal title.
+  # so the daemon only needs to flip @nudge_phase to animate it. Non-nudging
+  # panes fall back to the user's saved format (re-expanded via #{E:}).
   local fmt
   fmt='#{?#{@nudge_state},'
   fmt+='#{?#{==:#{@nudge_phase},1},#[fg=#{@nudge_color}]#[bold]#{@nudge_label},#[fg='"$DIM"']#{@nudge_label}}'
-  fmt+=',#{pane_index} #{pane_title}}'
+  fmt+=',#{E:@nudge_saved_pbf}}'
   tmux set -g pane-border-format "$fmt"
 
   # Auto-clear a pane when you switch to it. This tmux build has no per-pane
@@ -203,6 +211,45 @@ cmd_status() {
     | grep -E ' (needs-input|done|error|running)$' || echo "no active nudges"
 }
 
+# Fully reverse `init`: clear nudges, stop the daemon, restore the saved
+# pane-border-format, drop our options, and remove ONLY our focus hooks.
+cmd_uninstall() {
+  # 1) Clear every active nudge (restores per-pane / per-window overrides).
+  local p st
+  while read -r p st; do
+    if [ -n "${st:-}" ]; then cmd_off -t "$p"; fi
+  done < <(tmux list-panes -a -F '#{pane_id} #{@nudge_state}' 2>/dev/null)
+
+  # 2) Stop the daemon.
+  local pf pid; pf="$(server_pidfile)"
+  if [ -f "$pf" ]; then
+    pid="$(cat "$pf" 2>/dev/null || true)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    rm -f "$pf"
+  fi
+
+  # 3) Restore the user's original pane-border-format.
+  local saved; saved="$(tmux show -gv @nudge_saved_pbf 2>/dev/null || true)"
+  if [ -n "$saved" ]; then tmux set -g pane-border-format "$saved"
+  else tmux set -gu pane-border-format 2>/dev/null || true; fi
+
+  # 4) Drop our global options.
+  tmux set -gu @nudge_phase 2>/dev/null || true
+  tmux set -gu @nudge_saved_pbf 2>/dev/null || true
+
+  # 5) Remove ONLY our select-pane/window hooks (matched by our path), by index
+  #    high->low so earlier indices stay valid; the user's own hooks survive.
+  local name
+  for name in after-select-pane after-select-window; do
+    tmux show-hooks -g 2>/dev/null | grep -F "$SELF" \
+      | grep -oE "^${name}\[[0-9]+\]" | grep -oE '[0-9]+' | sort -rn \
+      | while read -r idx; do tmux set-hook -gu "${name}[$idx]" 2>/dev/null || true; done || true
+  done
+
+  tmux refresh-client 2>/dev/null || true
+  echo "tmux-nudge uninstalled."
+}
+
 # Universal harness adapter. ANY AI tool (Claude Code, Codex, Kiro CLI, …) that
 # can run a command on a lifecycle event registers this. It resolves the agent's
 # pane from $TMUX_PANE and maps a nudge state; any extra args (a JSON payload the
@@ -268,10 +315,11 @@ main() {
     ensure-daemon) ensure_daemon ;;
     status)        cmd_status "$@" ;;
     hook)          cmd_hook "$@" ;;
+    uninstall)     cmd_uninstall ;;
     claude-config) cmd_claude_config ;;
     codex-config)  cmd_codex_config ;;
     shell-init)    cmd_shell_init ;;
-    *) echo "usage: nudge {init | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config | shell-init}" ;;
+    *) echo "usage: nudge {init | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config | shell-init}" ;;
   esac
 }
 main "$@"
