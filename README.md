@@ -103,11 +103,19 @@ code. Config generators print ready-to-paste snippets with absolute paths:
 **Codex (OpenAI)** — `nudge codex-config` → `~/.codex/config.toml`
 (Codex emits `agent-turn-complete` → `needs-input`; clears on focus.)
 
-**Any other harness** (Kiro CLI, aider, gemini-cli, opencode, …): register a
-shell command / hook that runs `<path>/bin/nudge hook needs-input` on
-turn-complete (and `… clear` on prompt-submit, if the harness exposes it).
-This applies to CLI harnesses running **inside tmux**; a GUI IDE not in a tmux
-pane is out of scope.
+**Kiro CLI** — `nudge kiro-config` → your Kiro agent configuration file
+(under the `"hooks"` key; see [Kiro CLI hooks](https://kiro.dev/docs/cli/hooks/)).
+
+| Kiro event | Fires when | → |
+| --- | --- | --- |
+| `stop` | agent finishes a turn | `needs-input` |
+| `userPromptSubmit` | you send a prompt | `clear` |
+
+**Any other harness** (aider, gemini-cli, opencode, …): register a shell
+command / hook that runs `<path>/bin/nudge hook needs-input` on turn-complete
+(and `… clear` on prompt-submit, if the harness exposes it). This applies to
+CLI harnesses running **inside tmux**; a GUI IDE not in a tmux pane is out of
+scope.
 
 ## Any long-running command (generic)
 

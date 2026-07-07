@@ -298,6 +298,25 @@ notify = ["$SELF", "hook", "needs-input"]
 TOML
 }
 
+# Print a ready-to-paste hooks block for a Kiro CLI agent configuration file.
+# Kiro fires `stop` when the agent finishes a turn (→ needs-input) and
+# `userPromptSubmit` when you reply (→ clear); it sends the event JSON on stdin,
+# which `nudge hook` ignores.
+cmd_kiro_config() {
+  cat <<JSON
+{
+  "hooks": {
+    "stop": [
+      { "command": "$SELF hook needs-input" }
+    ],
+    "userPromptSubmit": [
+      { "command": "$SELF hook clear" }
+    ]
+  }
+}
+JSON
+}
+
 # Print the line to add to ~/.zshrc or ~/.bashrc to enable the generic
 # "long command finished" trigger for any shell command.
 cmd_shell_init() {
@@ -317,8 +336,9 @@ main() {
     uninstall)     cmd_uninstall ;;
     claude-config) cmd_claude_config ;;
     codex-config)  cmd_codex_config ;;
+    kiro-config)   cmd_kiro_config ;;
     shell-init)    cmd_shell_init ;;
-    *) echo "usage: nudge {init | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config | shell-init}" ;;
+    *) echo "usage: nudge {init | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config | kiro-config | shell-init}" ;;
   esac
 }
 main "$@"
