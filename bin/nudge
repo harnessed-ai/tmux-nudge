@@ -26,25 +26,37 @@ tmux() {
 # Resolve absolute path to this script so hooks/daemon can re-invoke it.
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
-DIM="${NUDGE_DIM:-colour238}"
+# Read a global tmux user option, falling back to a default. Lets users
+# customise every colour/label/timing via `set -g @nudge-… …` in tmux.conf.
+opt() {
+  local v; v="$(tmux show -gv "$1" 2>/dev/null || true)"
+  [ -n "$v" ] && echo "$v" || echo "$2"
+}
+
+# The "off" phase colour of the blink. Configurable so it contrasts with your
+# background (otherwise the blink can be invisible).
+DIM="$(opt @nudge-dim "${NUDGE_DIM:-colour238}")"
 
 color_for_state() {
   case "$1" in
-    needs-input) echo "${NUDGE_COLOR_NEEDS_INPUT:-colour214}" ;;  # orange
-    done)        echo "${NUDGE_COLOR_DONE:-colour46}" ;;          # green
-    error)       echo "${NUDGE_COLOR_ERROR:-colour196}" ;;        # red
-    *)           echo "colour214" ;;
+    needs-input) opt @nudge-color-needs-input "${NUDGE_COLOR_NEEDS_INPUT:-colour214}" ;;  # orange
+    done)        opt @nudge-color-done        "${NUDGE_COLOR_DONE:-colour46}" ;;          # green
+    error)       opt @nudge-color-error       "${NUDGE_COLOR_ERROR:-colour196}" ;;        # red
+    *)           opt @nudge-color-needs-input colour214 ;;
   esac
 }
 
 label_for_state() {
   case "$1" in
-    needs-input) echo "● tmux-nudge — needs you" ;;
-    done)        echo "✓ tmux-nudge — done" ;;
-    error)       echo "✗ tmux-nudge — error" ;;
-    *)           echo "● tmux-nudge" ;;
+    needs-input) opt @nudge-label-needs-input "● tmux-nudge — needs you" ;;
+    done)        opt @nudge-label-done        "✓ tmux-nudge — done" ;;
+    error)       opt @nudge-label-error       "✗ tmux-nudge — error" ;;
+    *)           opt @nudge-label-needs-input "● tmux-nudge" ;;
   esac
 }
+
+# Whether to also blink the window's status-bar entry (per-pane label always shows).
+window_blink_enabled() { [ "$(opt @nudge-window-blink on)" != off ]; }
 
 # The daemon's pid is tracked in a tmux server option (not a $TMPDIR file, whose
 # path varies between contexts) so ensure_daemon reliably finds a live daemon.
@@ -112,9 +124,12 @@ cmd_on() {
 
   # Layer C: blink the window's entry in the status list, but ONLY for the
   # inactive-window style — if you're already on this window, its label
-  # shouldn't blink (the pane's own label covers that).
-  local wstyle="fg=$(color_for_state "$state"),bold"
-  tmux set -w -t "$win" window-status-style "$wstyle" 2>/dev/null || true
+  # shouldn't blink (the pane's own label covers that). Opt-out via
+  # @nudge-window-blink off.
+  if window_blink_enabled; then
+    local wstyle="fg=$(color_for_state "$state"),bold"
+    tmux set -w -t "$win" window-status-style "$wstyle" 2>/dev/null || true
+  fi
 
   ensure_daemon
   tmux refresh-client 2>/dev/null || true
@@ -154,7 +169,8 @@ cmd_off() {
 }
 
 cmd_daemon() {
-  local interval="${NUDGE_INTERVAL:-0.5}"
+  # Blink speed (seconds per phase). Configurable via @nudge-interval.
+  local interval; interval="$(opt @nudge-interval "${NUDGE_INTERVAL:-0.5}")"
   while [ $# -gt 0 ]; do case "$1" in -i) interval="$2"; shift 2 ;; *) shift ;; esac; done
 
   # If another live daemon already owns the slot, don't run a duplicate.
@@ -179,15 +195,17 @@ cmd_daemon() {
       '#{?#{@nudge_state},#{?#{&&:#{&&:#{pane_active},#{window_active}},#{session_attached}},#{pane_id},},}' \
       2>/dev/null | grep -v '^$' || true)
 
-    # Pulse Layer C (the window-list entry) per window that has a nudging pane.
-    # The pane background tint (Layer A) is steady; the label (Layer B) blinks
-    # declaratively via @nudge_phase below. Shared pane borders are left alone.
-    while read -r win state color; do
-      [ -n "${state:-}" ] || continue
-      if [ "$phase" = 1 ]; then style="fg=${color},bold"; else style="fg=${DIM}"; fi
-      # Inactive-window style only — the active window's label is left alone.
-      tmux set -w -t "$win" window-status-style "$style" 2>/dev/null || true
-    done < <(tmux list-panes -a -F '#{window_id} #{@nudge_state} #{@nudge_color}' 2>/dev/null)
+    # Pulse Layer C (the window-list entry) per window that has a nudging pane,
+    # unless disabled. The label (Layer B) blinks declaratively via @nudge_phase
+    # below. Shared pane borders are left alone.
+    if window_blink_enabled; then
+      while read -r win state color; do
+        [ -n "${state:-}" ] || continue
+        if [ "$phase" = 1 ]; then style="fg=${color},bold"; else style="fg=${DIM}"; fi
+        # Inactive-window style only — the active window's label is left alone.
+        tmux set -w -t "$win" window-status-style "$style" 2>/dev/null || true
+      done < <(tmux list-panes -a -F '#{window_id} #{@nudge_state} #{@nudge_color}' 2>/dev/null)
+    fi
 
     # Layer B: one flag flip animates every label declaratively.
     tmux set -g @nudge_phase "$phase" 2>/dev/null || break

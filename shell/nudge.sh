@@ -8,7 +8,12 @@
 #   source /path/to/tmux-nudge/shell/nudge.sh
 # or:  eval "$(/path/to/tmux-nudge/bin/nudge shell-init)"
 
-: "${NUDGE_MIN_SECONDS:=15}"
+# Threshold in seconds: $NUDGE_MIN_SECONDS env wins, else the tmux option
+# @nudge-min-seconds, else 15.
+if [ -z "${NUDGE_MIN_SECONDS:-}" ]; then
+  NUDGE_MIN_SECONDS="$(command tmux show -gv @nudge-min-seconds 2>/dev/null || true)"
+  [ -n "${NUDGE_MIN_SECONDS:-}" ] || NUDGE_MIN_SECONDS=15
+fi
 
 # Resolve bin/nudge relative to this file (works in both zsh and bash).
 if [ -n "${ZSH_VERSION:-}" ]; then

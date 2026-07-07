@@ -76,6 +76,34 @@ hooks left by older versions, leaving your own untouched).
 set -g @plugin 'bmohan01/tmux-nudge'
 ```
 
+## Configuration
+
+Everything is customisable via tmux options — set them in your tmux config
+**before** tmux-nudge loads. Defaults match the out-of-box look:
+
+```tmux
+# colours (the "on" phase of the blink)
+set -g @nudge-color-needs-input colour214   # orange
+set -g @nudge-color-done        colour46    # green
+set -g @nudge-color-error       colour196   # red
+set -g @nudge-dim               colour238   # the "off" phase — pick one that
+                                            # contrasts with your background,
+                                            # or the blink can be invisible
+
+# labels shown on the pane's border row
+set -g @nudge-label-needs-input "● tmux-nudge — needs you"
+set -g @nudge-label-done        "✓ tmux-nudge — done"
+set -g @nudge-label-error       "✗ tmux-nudge — error"
+
+set -g @nudge-interval     0.5   # blink speed, seconds per phase
+set -g @nudge-window-blink on    # also blink the window's status-bar entry (off to disable)
+set -g @nudge-min-seconds  15    # shell trigger: only nudge for commands longer than this
+```
+
+Any option can also be overridden per-invocation with the matching `NUDGE_*`
+env var. Changing `@nudge-dim` takes effect after a reload (`nudge init` or a
+tmux config reload), since it's baked into the border format at init.
+
 ## AI harness integration
 
 Any terminal AI harness that can run a command on a lifecycle event can drive
