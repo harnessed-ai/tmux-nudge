@@ -137,12 +137,13 @@ cmd_off() {
   done
   [ -n "$pane" ] || pane="$(tmux display-message -p '#{pane_id}')"
 
-  # Clear state and any Layer-A border override on this pane.
+  # Clear state on this pane. (window-style/active-style are unset defensively
+  # in case an older version left a background tint.)
   tmux set -pu -t "$pane" @nudge_state 2>/dev/null || true
   tmux set -pu -t "$pane" @nudge_color 2>/dev/null || true
   tmux set -pu -t "$pane" @nudge_label 2>/dev/null || true
-  tmux set -pu -t "$pane" pane-border-style 2>/dev/null || true
-  tmux set -pu -t "$pane" pane-active-border-style 2>/dev/null || true
+  tmux set -pu -t "$pane" window-style 2>/dev/null || true
+  tmux set -pu -t "$pane" window-active-style 2>/dev/null || true
 
   # If nothing else in the window is nudging, reclaim the label row (Layer B)
   # and restore the window's status-list style (Layer C).
@@ -167,22 +168,20 @@ cmd_daemon() {
   echo "$$" > "$pf"
   trap 'rm -f "$pf" 2>/dev/null || true' EXIT
 
-  local phase=0 pid win state color style
+  local phase=0 win state color style
   while :; do
     [ "$(active_count)" -eq 0 ] && break        # nothing to animate → exit
     phase=$((1 - phase))
 
-    # Drive the colour layers per active pane (Layer A border + Layer C window).
-    while read -r pid win state color; do
+    # Pulse Layer C (the window-list entry) per window that has a nudging pane.
+    # The pane background tint (Layer A) is steady; the label (Layer B) blinks
+    # declaratively via @nudge_phase below. Shared pane borders are left alone.
+    while read -r win state color; do
       [ -n "${state:-}" ] || continue
       if [ "$phase" = 1 ]; then style="fg=${color},bold"; else style="fg=${DIM}"; fi
-      # Layer A: this pane's border.
-      tmux set -p -t "$pid" pane-border-style "$style" 2>/dev/null || true
-      tmux set -p -t "$pid" pane-active-border-style "$style" 2>/dev/null || true
-      # Layer C: this pane's window entry in the status list.
       tmux set -w -t "$win" window-status-style "$style" 2>/dev/null || true
       tmux set -w -t "$win" window-status-current-style "$style" 2>/dev/null || true
-    done < <(tmux list-panes -a -F '#{pane_id} #{window_id} #{@nudge_state} #{@nudge_color}' 2>/dev/null)
+    done < <(tmux list-panes -a -F '#{window_id} #{@nudge_state} #{@nudge_color}' 2>/dev/null)
 
     # Layer B: one flag flip animates every label declaratively.
     tmux set -g @nudge_phase "$phase" 2>/dev/null || break
