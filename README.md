@@ -1,8 +1,8 @@
 # tmux-nudge
 
-A tmux plugin that **nudges you when a pane needs a human** — by blinking or
-highlighting the pane/window border. Anything can nudge you: a finished shell
-script, an idle build, or an AI coding agent waiting for your response.
+A tmux plugin that **nudges you when a pane needs a human** — by blinking a label
+on the pane and its entry in the status bar. Anything can nudge you: a finished
+shell script, an idle build, or an AI coding agent waiting for your response.
 
 ## Why
 
@@ -20,32 +20,38 @@ Existing tools split the problem in two and solve neither completely:
 a single "make this pane demand attention" engine, so the visual treatment is
 identical no matter what triggered it — shell, script, or AI.
 
-## Design (planned)
+## How it works
 
-Trigger tiers → shared renderer:
+Pluggable **trigger sources** feed one **renderer**, so the signal is identical
+no matter what flagged the pane:
 
-| Tier    | Source                                         | Precision                  | Covers                       |
-| ------- | ---------------------------------------------- | -------------------------- | ---------------------------- |
-| Base    | tmux idle detection (`monitor-silence` style)  | coarse ("stopped")         | shell, scripts, builds, ssh  |
-| Precise | agent hooks (Claude Code `Stop`/`Notification`)| exact (done vs needs-input)| AI agents                    |
-| Middle  | PTY scrape for prompt patterns (`[y/N]`, `❯`)  | medium                     | agents without hooks         |
+| Trigger          | Source                                   | Covers                                 |
+| ---------------- | ---------------------------------------- | -------------------------------------- |
+| AI harness hook  | `nudge hook` from Claude Code / Codex / … | AI agents (needs-input / done / error) |
+| Shell completion | `shell/nudge.sh` precmd (zsh/bash)        | any long-running command               |
+| Manual / scripts | `nudge on`                                | anything                               |
 
-**Differentiator:** an actual *animated, per-pane* border pulse — not just a
-static colour, and scoped to the individual pane that needs you.
+A flagged pane is marked two ways, both **per-pane** (no shared-border ambiguity):
+
+- a **blinking label** on the pane's own border row (`● tmux-nudge — needs you`)
+- the pane's **window entry blinks** in the status bar — but only while that
+  window is **not** the one you're currently on
+
+A small daemon animates the blink and **auto-clears** any flagged pane the moment
+you view it (mouse, keyboard, or window switch alike). It starts on the first
+nudge and exits when none remain.
 
 ## Status
 
-Feasibility proven and the **engine core** is implemented ([`bin/nudge`](bin/nudge)):
-per-pane state, a pulse daemon (auto starts/stops), the layered renderer, and
-auto-clear when you focus a pane. Trigger integrations (Claude Code hook, generic
-shell/idle) are next.
+Working end to end on tmux 3.6b: engine + renderer, AI-harness hooks (Claude
+Code, Codex), the generic shell trigger, and safe install/uninstall.
 
 ### Try it live (isolated — won't touch your real session)
 
 ```sh
 # from a PLAIN terminal (not inside tmux):
 experiments/try-engine.sh
-# … watch the left pane border pulse + labels; C-b d to detach, then:
+# … watch the flagged pane's label blink and its window entry blink; C-b d, then:
 tmux -L nudgedemo kill-server
 ```
 
@@ -60,9 +66,9 @@ nudge status
 ```
 
 `init` is non-destructive: it saves your `pane-border-format` and composes with
-it (non-nudging panes keep your look), and appends its focus hooks. `uninstall`
-restores your format and removes **only** tmux-nudge's own hooks, leaving yours
-intact.
+it (non-nudging panes keep your look), and installs **no** tmux hooks — auto-clear
+is daemon-driven. `uninstall` restores your format exactly (and strips any focus
+hooks left by older versions, leaving your own untouched).
 
 ### As a plugin (TPM)
 
@@ -120,9 +126,11 @@ a pane you're watching. Focus the pane to clear it.
 
 ### Feasibility spikes
 
-The throwaway demos that proved each layer live:
-[`experiments/blink-spike.sh`](experiments/blink-spike.sh) (border pulse) and
-[`experiments/label-spike.sh`](experiments/label-spike.sh) (single-pane label).
+Throwaway demos from early feasibility work:
+[`experiments/blink-spike.sh`](experiments/blink-spike.sh) (per-pane border
+colour — since dropped, as it colours the shared divider) and
+[`experiments/label-spike.sh`](experiments/label-spike.sh) (single-pane label —
+the approach that shipped).
 
 ## License
 
