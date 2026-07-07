@@ -117,11 +117,11 @@ cmd_on() {
   local win; win="$(tmux display-message -p -t "$pane" '#{window_id}')"
   tmux set -w -t "$win" pane-border-status top
 
-  # Layer C: highlight the window's entry in the status list so it's visible
-  # even when this window is not the one you're looking at.
+  # Layer C: blink the window's entry in the status list, but ONLY for the
+  # inactive-window style — if you're already on this window, its label
+  # shouldn't blink (the pane's own label covers that).
   local wstyle="fg=$(color_for_state "$state"),bold"
   tmux set -w -t "$win" window-status-style "$wstyle" 2>/dev/null || true
-  tmux set -w -t "$win" window-status-current-style "$wstyle" 2>/dev/null || true
 
   ensure_daemon
   tmux refresh-client 2>/dev/null || true
@@ -179,8 +179,8 @@ cmd_daemon() {
     while read -r win state color; do
       [ -n "${state:-}" ] || continue
       if [ "$phase" = 1 ]; then style="fg=${color},bold"; else style="fg=${DIM}"; fi
+      # Inactive-window style only — the active window's label is left alone.
       tmux set -w -t "$win" window-status-style "$style" 2>/dev/null || true
-      tmux set -w -t "$win" window-status-current-style "$style" 2>/dev/null || true
     done < <(tmux list-panes -a -F '#{window_id} #{@nudge_state} #{@nudge_color}' 2>/dev/null)
 
     # Layer B: one flag flip animates every label declaratively.
