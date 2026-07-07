@@ -46,9 +46,9 @@ label_for_state() {
   esac
 }
 
-server_pidfile() {
-  echo "${TMPDIR:-/tmp}/tmux-nudge-$(tmux display-message -p '#{pid}').pid"
-}
+# The daemon's pid is tracked in a tmux server option (not a $TMPDIR file, whose
+# path varies between contexts) so ensure_daemon reliably finds a live daemon.
+daemon_pid() { tmux show -gv @nudge_daemon_pid 2>/dev/null || true; }
 
 active_count() {
   tmux list-panes -a -F '#{@nudge_state}' 2>/dev/null | grep -c . || true
@@ -58,7 +58,6 @@ active_count() {
 
 cmd_init() {
   tmux set -g @nudge_phase 0
-  tmux set -g focus-events on
 
   # Save the user's original pane-border-format ONCE so non-nudging panes keep
   # their look (composed via #{E:} below) and it can be restored on uninstall.
@@ -77,15 +76,9 @@ cmd_init() {
   fmt+=',#{E:@nudge_saved_pbf}}'
   tmux set -g pane-border-format "$fmt"
 
-  # Auto-clear a pane when you switch to it. This tmux build has no per-pane
-  # focus hook, so we use after-select-pane / after-select-window — both fire
-  # with the now-active pane in context. Appended (-a) so we coexist with the
-  # user's own hooks; socket baked in so the hook targets the right server.
-  local hookenv=""
-  [ -n "${NUDGE_SOCKET:-}" ] && hookenv="NUDGE_SOCKET=$NUDGE_SOCKET "
-  local clear="run-shell -b '${hookenv}\"$SELF\" off -t \"#{pane_id}\"'"
-  tmux set-hook -ga after-select-pane "$clear"
-  tmux set-hook -ga after-select-window "$clear"
+  # Note: auto-clear is handled by the daemon (it clears any nudging pane you're
+  # actually viewing), not by select-pane hooks — that also works for mouse
+  # clicks, which don't reliably fire those hooks.
 }
 
 cmd_on() {
@@ -164,14 +157,27 @@ cmd_daemon() {
   local interval="${NUDGE_INTERVAL:-0.5}"
   while [ $# -gt 0 ]; do case "$1" in -i) interval="$2"; shift 2 ;; *) shift ;; esac; done
 
-  local pf; pf="$(server_pidfile)"
-  echo "$$" > "$pf"
-  trap 'rm -f "$pf" 2>/dev/null || true' EXIT
+  # If another live daemon already owns the slot, don't run a duplicate.
+  local existing; existing="$(daemon_pid)"
+  if [ -n "$existing" ] && [ "$existing" != "$$" ] && kill -0 "$existing" 2>/dev/null; then
+    exit 0
+  fi
+  tmux set -g @nudge_daemon_pid "$$" 2>/dev/null || true
+  trap 'tmux set -gu @nudge_daemon_pid 2>/dev/null || true' EXIT
 
-  local phase=0 win state color style
+  local phase=0 win state color style pid
   while :; do
     [ "$(active_count)" -eq 0 ] && break        # nothing to animate → exit
     phase=$((1 - phase))
+
+    # Auto-clear any nudging pane you're now viewing: active pane of the current
+    # window of an attached session. Works for mouse clicks, keyboard selection,
+    # and window switches alike (no select-pane hooks needed).
+    while read -r pid; do
+      [ -n "$pid" ] && cmd_off -t "$pid"
+    done < <(tmux list-panes -a -F \
+      '#{?#{@nudge_state},#{?#{&&:#{&&:#{pane_active},#{window_active}},#{session_attached}},#{pane_id},},}' \
+      2>/dev/null | grep -v '^$' || true)
 
     # Pulse Layer C (the window-list entry) per window that has a nudging pane.
     # The pane background tint (Layer A) is steady; the label (Layer B) blinks
@@ -196,11 +202,8 @@ cmd_daemon() {
 }
 
 ensure_daemon() {
-  local pf pid; pf="$(server_pidfile)"
-  if [ -f "$pf" ]; then
-    pid="$(cat "$pf" 2>/dev/null || true)"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
-  fi
+  local pid; pid="$(daemon_pid)"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
   nohup "$SELF" daemon >/dev/null 2>&1 &
   disown 2>/dev/null || true
 }
@@ -220,12 +223,9 @@ cmd_uninstall() {
   done < <(tmux list-panes -a -F '#{pane_id} #{@nudge_state}' 2>/dev/null)
 
   # 2) Stop the daemon.
-  local pf pid; pf="$(server_pidfile)"
-  if [ -f "$pf" ]; then
-    pid="$(cat "$pf" 2>/dev/null || true)"
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
-    rm -f "$pf"
-  fi
+  local pid; pid="$(daemon_pid)"
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  tmux set -gu @nudge_daemon_pid 2>/dev/null || true
 
   # 3) Restore the user's original pane-border-format.
   local saved; saved="$(tmux show -gv @nudge_saved_pbf 2>/dev/null || true)"
