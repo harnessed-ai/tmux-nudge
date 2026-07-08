@@ -1,0 +1,4 @@
+# auto-install stamp (per-machine)
+.nudge-installed
+# dotfile backups made by the installer
+*.nudge-bak-*

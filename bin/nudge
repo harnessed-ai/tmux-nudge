@@ -341,6 +341,11 @@ cmd_shell_init() {
   echo "source $(dirname "$(dirname "$SELF")")/shell/nudge.sh"
 }
 
+# One-shot wiring of the shell + Claude + Kiro integrations (idempotent, backups).
+cmd_install() {
+  bash "$(dirname "$(dirname "$SELF")")/scripts/install-integrations.sh"
+}
+
 main() {
   local cmd="${1:-help}"; shift 2>/dev/null || true
   case "$cmd" in
@@ -352,11 +357,12 @@ main() {
     status)        cmd_status "$@" ;;
     hook)          cmd_hook "$@" ;;
     uninstall)     cmd_uninstall ;;
+    install)       cmd_install ;;
     claude-config) cmd_claude_config ;;
     codex-config)  cmd_codex_config ;;
     kiro-config)   cmd_kiro_config ;;
     shell-init)    cmd_shell_init ;;
-    *) echo "usage: nudge {init | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config | kiro-config | shell-init}" ;;
+    *) echo "usage: nudge {init | install | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config | kiro-config | shell-init}" ;;
   esac
 }
 main "$@"

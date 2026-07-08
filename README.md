@@ -58,7 +58,8 @@ tmux -L nudgedemo kill-server
 ### CLI
 
 ```sh
-nudge init                      # install (done by nudge.tmux); saves your config
+nudge init                      # set up the renderer (done by nudge.tmux); saves your config
+nudge install                   # wire shell + Claude + Kiro integrations (idempotent, backups)
 nudge uninstall                 # fully reverse init; restores your config
 nudge on  [-t pane] [-s state]  # state: needs-input | done | error
 nudge off [-t pane]
@@ -70,11 +71,31 @@ it (non-nudging panes keep your look), and installs **no** tmux hooks — auto-c
 is daemon-driven. `uninstall` restores your format exactly (and strips any focus
 hooks left by older versions, leaving your own untouched).
 
-### As a plugin (TPM)
+## Install
+
+With [TPM](https://github.com/tmux-plugins/tpm), add one line to your tmux config and press `prefix + I`:
 
 ```tmux
 set -g @plugin 'bmohan01/tmux-nudge'
 ```
+
+That's it. On first load it sets up the renderer **and auto-wires the shell +
+Claude Code + Kiro CLI integrations** for whatever you have installed —
+idempotently, backing up each file it edits (`*.nudge-bak-*`). Your existing
+hooks are preserved (it appends, never overwrites).
+
+Prefer to do it yourself? Disable the auto-wiring and wire only what you want:
+
+```tmux
+set -g @nudge-auto-install off
+```
+
+```sh
+nudge install        # run the same wiring manually, any time (idempotent)
+```
+
+Without TPM, source the plugin from your tmux config like any other:
+`run-shell '/path/to/tmux-nudge/nudge.tmux'`.
 
 ## Configuration
 
