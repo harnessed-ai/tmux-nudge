@@ -186,14 +186,18 @@ cmd_daemon() {
     [ "$(active_count)" -eq 0 ] && break        # nothing to animate → exit
     phase=$((1 - phase))
 
-    # Auto-clear any nudging pane you're now viewing: active pane of the current
-    # window of an attached session. Works for mouse clicks, keyboard selection,
-    # and window switches alike (no select-pane hooks needed).
-    while read -r pid; do
-      [ -n "$pid" ] && cmd_off -t "$pid"
-    done < <(tmux list-panes -a -F \
-      '#{?#{@nudge_state},#{?#{&&:#{&&:#{pane_active},#{window_active}},#{session_attached}},#{pane_id},},}' \
-      2>/dev/null | grep -v '^$' || true)
+    # Auto-clear (focus mode only): clear any nudging pane you're now viewing —
+    # active pane of the current window of an attached session. Works for mouse
+    # clicks, keyboard selection, and window switches alike. In interaction mode
+    # a pane clears only when you engage it (AI reply / next shell command), so
+    # switching to a window doesn't dismiss the nudges you haven't handled yet.
+    if [ "$(opt @nudge-clear-mode focus)" = focus ]; then
+      while read -r pid; do
+        [ -n "$pid" ] && cmd_off -t "$pid"
+      done < <(tmux list-panes -a -F \
+        '#{?#{@nudge_state},#{?#{&&:#{&&:#{pane_active},#{window_active}},#{session_attached}},#{pane_id},},}' \
+        2>/dev/null | grep -v '^$' || true)
+    fi
 
     # Pulse Layer C (the window-list entry) per window that has a nudging pane,
     # unless disabled. The label (Layer B) blinks declaratively via @nudge_phase

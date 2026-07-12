@@ -8,10 +8,16 @@
 #   source /path/to/tmux-nudge/shell/nudge.sh
 # or:  eval "$(/path/to/tmux-nudge/bin/nudge shell-init)"
 
+# Talk to the same tmux server bin/nudge does (honors NUDGE_SOCKET for testing).
+_nudge_tmux() {
+  if [ -n "${NUDGE_SOCKET:-}" ]; then command tmux -L "$NUDGE_SOCKET" "$@"
+  else command tmux "$@"; fi
+}
+
 # Threshold in seconds: $NUDGE_MIN_SECONDS env wins, else the tmux option
 # @nudge-min-seconds, else 15.
 if [ -z "${NUDGE_MIN_SECONDS:-}" ]; then
-  NUDGE_MIN_SECONDS="$(command tmux show -gv @nudge-min-seconds 2>/dev/null || true)"
+  NUDGE_MIN_SECONDS="$(_nudge_tmux show -gv @nudge-min-seconds 2>/dev/null || true)"
   [ -n "${NUDGE_MIN_SECONDS:-}" ] || NUDGE_MIN_SECONDS=15
 fi
 
@@ -27,7 +33,17 @@ _NUDGE_BIN="$(cd "$(dirname "${_nudge_self:-.}")/../bin" 2>/dev/null && pwd)/nud
 unset _nudge_self
 [ -x "$_NUDGE_BIN" ] || return 0 2>/dev/null || true
 
-_nudge_preexec() { _NUDGE_START=$SECONDS; }
+_nudge_preexec() {
+  _NUDGE_START=$SECONDS
+  # Running a command in a flagged pane clears its nudge — you're engaging it.
+  # Mode-independent (so it works even if @nudge-clear-mode changes mid-session):
+  # in focus mode the pane is usually already cleared by the daemon (no-op); in
+  # interaction mode this is how shell panes clear. Only acts if actually flagged.
+  if [ -n "${TMUX_PANE:-}" ] && \
+     [ -n "$(_nudge_tmux show -pqv -t "$TMUX_PANE" @nudge_state 2>/dev/null)" ]; then
+    ( "$_NUDGE_BIN" off -t "$TMUX_PANE" >/dev/null 2>&1 & )
+  fi
+}
 
 _nudge_precmd() {
   local exit=$?
@@ -38,7 +54,9 @@ _nudge_precmd() {
   [ "$elapsed" -ge "$NUDGE_MIN_SECONDS" ] || return
   local state=done
   [ "$exit" -eq 0 ] || state=error
-  "$_NUDGE_BIN" on -t "$TMUX_PANE" -s "$state" --if-away >/dev/null 2>&1 &
+  # Run detached in a subshell so the interactive shell doesn't print job-control
+  # notices ([1] 12345 … done) into the pane.
+  ( "$_NUDGE_BIN" on -t "$TMUX_PANE" -s "$state" --if-away >/dev/null 2>&1 & )
 }
 
 if [ -n "${ZSH_VERSION:-}" ]; then

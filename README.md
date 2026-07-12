@@ -119,6 +119,13 @@ set -g @nudge-label-error       "✗ tmux-nudge — error"
 set -g @nudge-interval     0.5   # blink speed, seconds per phase
 set -g @nudge-window-blink on    # also blink the window's status-bar entry (off to disable)
 set -g @nudge-min-seconds  15    # shell trigger: only nudge for commands longer than this
+
+# when a nudge clears:
+#   focus       — as soon as you look at (focus) the pane   [default]
+#   interaction — only when you engage the pane (AI reply / next shell command),
+#                 so switching to a window with several nudges shows them all
+#                 until you handle each
+set -g @nudge-clear-mode   focus
 ```
 
 Any option can also be overridden per-invocation with the matching `NUDGE_*`
