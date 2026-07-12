@@ -73,29 +73,56 @@ hooks left by older versions, leaving your own untouched).
 
 ## Install
 
-With [TPM](https://github.com/tmux-plugins/tpm), add one line to your tmux config and press `prefix + I`:
+Pick **one** of the two routes below. Either way, on first load tmux-nudge sets
+up the renderer **and auto-wires the shell + Claude Code + Kiro CLI
+integrations** for whatever you have installed — idempotently, backing up each
+file it edits (`*.nudge-bak-*`), appending to your existing hooks rather than
+overwriting them.
+
+### Option A — TPM (recommended)
+
+With [TPM](https://github.com/tmux-plugins/tpm), add one line and press `prefix + I`:
 
 ```tmux
 set -g @plugin 'bmohan01/tmux-nudge'
 ```
 
-That's it. On first load it sets up the renderer **and auto-wires the shell +
-Claude Code + Kiro CLI integrations** for whatever you have installed —
-idempotently, backing up each file it edits (`*.nudge-bak-*`). Your existing
-hooks are preserved (it appends, never overwrites).
+TPM clones it to `~/.tmux/plugins/tmux-nudge`. Update later with `prefix + U`.
 
-Prefer to do it yourself? Disable the auto-wiring and wire only what you want:
+### Option B — local clone (for hacking on it)
 
-```tmux
-set -g @nudge-auto-install off
-```
+Clone anywhere and load it from your tmux config like any other `run-shell` plugin:
 
 ```sh
-nudge install        # run the same wiring manually, any time (idempotent)
+git clone https://github.com/bmohan01/tmux-nudge ~/src/tmux-nudge
+```
+```tmux
+run-shell '~/src/tmux-nudge/nudge.tmux'
 ```
 
-Without TPM, source the plugin from your tmux config like any other:
-`run-shell '/path/to/tmux-nudge/nudge.tmux'`.
+Your edits are live — no reinstall.
+
+### Auto-wiring controls
+
+```tmux
+set -g @nudge-auto-install off   # skip the auto-wiring entirely
+```
+```sh
+nudge install                    # run the wiring manually, any time
+```
+
+### Switching between the two (seamless)
+
+All the integration paths (Claude/Kiro hooks, the `~/.zshrc` source line) point
+at whichever checkout loaded them. When you switch routes, `nudge install`
+**repairs those paths automatically** on the new checkout's first load — no
+manual editing of your Claude/Kiro/shell config. You only need to:
+
+1. Remove the **other** load line from your tmux config (delete the `run-shell`
+   line if moving to `@plugin`, or vice-versa) so it isn't loaded twice.
+2. Reload tmux. The new checkout's auto-install repoints everything to itself.
+
+(Removing the old checkout folder is then safe.)
 
 ## Configuration
 
