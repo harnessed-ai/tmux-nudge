@@ -4,6 +4,8 @@ A tmux plugin that **nudges you when a pane needs a human** — by blinking a la
 on the pane and its entry in the status bar. Anything can nudge you: a finished
 shell script, an idle build, or an AI coding agent waiting for your response.
 
+![tmux-nudge demo](./demo.gif)
+
 ## Why
 
 Existing tools split the problem in two and solve neither completely:
