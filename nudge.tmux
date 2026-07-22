@@ -2,7 +2,7 @@
 # tmux-nudge plugin entry point (TPM-compatible).
 #
 # Install with TPM:
-#   set -g @plugin 'bmohan01/tmux-nudge'
+#   set -g @plugin 'harnessed-ai/tmux-nudge'
 # then press prefix + I. That's it — this sets up the renderer and, on first
 # load, wires the shell + Claude + Kiro integrations for you (idempotent, with
 # backups). To skip the auto-wiring:  set -g @nudge-auto-install 'off'

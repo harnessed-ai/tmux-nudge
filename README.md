@@ -86,7 +86,7 @@ overwriting them.
 With [TPM](https://github.com/tmux-plugins/tpm), add one line and press `prefix + I`:
 
 ```tmux
-set -g @plugin 'bmohan01/tmux-nudge'
+set -g @plugin 'harnessed-ai/tmux-nudge'
 ```
 
 TPM clones it to `~/.tmux/plugins/tmux-nudge`. Update later with `prefix + U`.
@@ -96,7 +96,7 @@ TPM clones it to `~/.tmux/plugins/tmux-nudge`. Update later with `prefix + U`.
 Clone anywhere and load it from your tmux config like any other `run-shell` plugin:
 
 ```sh
-git clone https://github.com/bmohan01/tmux-nudge ~/src/tmux-nudge
+git clone https://github.com/harnessed-ai/tmux-nudge ~/src/tmux-nudge
 ```
 ```tmux
 run-shell '~/src/tmux-nudge/nudge.tmux'
