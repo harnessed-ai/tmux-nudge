@@ -34,61 +34,50 @@ for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
   fi
 done
 
-# --- Claude Code hooks -------------------------------------------------------
-CS="$HOME/.claude/settings.json"
-if [ -f "$CS" ]; then
-  python3 - "$CS" <<'PY'
+# --- AI agents (Claude Code, Kiro CLI) ---------------------------------------
+# Agents report through the shared harnessed-ai hook (scripts/agent-hook.sh), which
+# writes the pane's @agent_state; nudge just renders it (see `nudge sync`). Other plugins
+# can share the same hook, so with several installed each agent event runs ONE hook.
+# 1) drop the hooks older tmux-nudge versions installed ("nudge hook …"; Codex's notify
+#    line in ~/.codex/config.toml is separate and stays);
+# 2) register the shared hook: one entry per event, keeping a newer copy if a sibling
+#    plugin already registered one.
+if command -v jq >/dev/null 2>&1; then
+  python3 - "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "$HOME"/.kiro/agents/*.json <<'PY'
 import json, os, sys, shutil
-p = sys.argv[1]; NUDGE = os.environ["NUDGE"]; TS = os.environ["TS"]
-d = json.load(open(p)); h = d.setdefault("hooks", {})
-def is_ours(e):
-    cmds = [x.get("command","") for x in e.get("hooks",[])] if "hooks" in e else [e.get("command","")]
-    return any("nudge hook" in c for c in cmds)
-def entry(state, matcher):
-    return {"matcher": matcher, "hooks": [{"type":"command","command": f"{NUDGE} hook {state}"}]}
-want = {"Stop":("needs-input","*"),
-        "Notification":("needs-input","permission_prompt|idle_prompt"),
-        "UserPromptSubmit":("clear","*")}
-before = json.dumps(d, sort_keys=True)
-for ev,(state,matcher) in want.items():
-    arr = h.setdefault(ev, [])
-    arr[:] = [e for e in arr if not is_ours(e)]   # drop ours (repairs stale paths)
-    arr.append(entry(state, matcher))
-after = json.dumps(d, sort_keys=True)
-if before != after:
-    shutil.copy(p, f"{p}.nudge-bak-{TS}")
-    json.dump(d, open(p,"w"), indent=2)
-    print("  claude: wired/repaired ->", p)
-else:
-    print("  claude: already correct ->", p)
+TS = os.environ["TS"]
+def legacy(c): return "nudge hook" in (c or "")
+for p in sys.argv[1:]:
+    if not os.path.isfile(p) or p.endswith(".example"):
+        continue
+    try:
+        d = json.load(open(p))
+    except Exception:
+        continue
+    h = d.get("hooks")
+    if not isinstance(h, dict):
+        continue
+    before = json.dumps(d, sort_keys=True)
+    for ev, arr in list(h.items()):
+        if not isinstance(arr, list):
+            continue
+        keep = []
+        for e in arr:
+            if isinstance(e, dict) and isinstance(e.get("hooks"), list):     # Claude
+                e["hooks"] = [x for x in e["hooks"] if not legacy(x.get("command"))]
+                if e["hooks"]:
+                    keep.append(e)
+            elif not (isinstance(e, dict) and legacy(e.get("command"))):     # Kiro
+                keep.append(e)
+        h[ev] = keep
+    if json.dumps(d, sort_keys=True) != before:
+        shutil.copy(p, f"{p}.nudge-bak-{TS}")
+        json.dump(d, open(p, "w"), indent=2)
+        print("  agents: removed old 'nudge hook' entries ->", p)
 PY
-fi
-
-# --- Kiro CLI hooks (every agent config, skip .example) ----------------------
-if [ -d "$HOME/.kiro/agents" ]; then
-  for f in "$HOME/.kiro/agents"/*.json; do
-    [ -f "$f" ] || continue
-    case "$f" in *.example) continue ;; esac
-    python3 - "$f" <<'PY'
-import json, os, sys, shutil
-p = sys.argv[1]; NUDGE = os.environ["NUDGE"]; TS = os.environ["TS"]
-d = json.load(open(p)); h = d.setdefault("hooks", {})
-def is_ours(e): return "nudge hook" in e.get("command","")
-want = {"stop":"needs-input", "userPromptSubmit":"clear"}
-before = json.dumps(d, sort_keys=True)
-for ev,state in want.items():
-    arr = h.setdefault(ev, [])
-    arr[:] = [e for e in arr if not is_ours(e)]
-    arr.append({"command": f"{NUDGE} hook {state}"})
-after = json.dumps(d, sort_keys=True)
-if before != after:
-    shutil.copy(p, f"{p}.nudge-bak-{TS}")
-    json.dump(d, open(p,"w"), indent=2)
-    print("  kiro: wired/repaired ->", p)
-else:
-    print("  kiro: already correct ->", p)
-PY
-  done
+  bash "$REPO/scripts/install-hooks.sh" 2>&1 | sed 's/^/  agents: /'
+else
+  echo "  agents: jq not found — skipping agent hooks (brew install jq, then: nudge install)"
 fi
 
 echo "tmux-nudge integrations installed (pointing at $REPO)."

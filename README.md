@@ -29,7 +29,8 @@ no matter what flagged the pane:
 
 | Trigger          | Source                                   | Covers                                 |
 | ---------------- | ---------------------------------------- | -------------------------------------- |
-| AI harness hook  | `nudge hook` from Claude Code / Codex / … | AI agents (needs-input / done / error) |
+| AI agents        | the shared `agent-hook.sh` (Claude Code, Kiro) → `nudge sync` | AI agents (waiting / done / error) |
+| Other harnesses  | `nudge hook` (Codex, aider, …)            | AI agents (needs-input / done / error) |
 | Shell completion | `shell/nudge.sh` precmd (zsh/bash)        | any long-running command               |
 | Manual / scripts | `nudge on`                                | anything                               |
 
@@ -45,8 +46,10 @@ nudge and exits when none remain.
 
 ## Status
 
-Working end to end on tmux 3.6b: engine + renderer, AI-harness hooks (Claude
-Code, Codex), the generic shell trigger, and safe install/uninstall.
+Working end to end on tmux 3.6b: engine + renderer, the shared agent hook (Claude
+Code, Kiro), Codex via `nudge hook`, the generic shell trigger, and safe
+install/uninstall. `tests/contract_test.sh` checks it all end to end on an
+isolated tmux server.
 
 ### Try it live (isolated — won't touch your real session)
 
@@ -65,6 +68,7 @@ nudge install                   # wire shell + Claude + Kiro integrations (idemp
 nudge uninstall                 # fully reverse init; restores your config
 nudge on  [-t pane] [-s state]  # state: needs-input | done | error
 nudge off [-t pane]
+nudge sync -t pane              # redraw a pane from its shared @agent_state
 nudge status
 ```
 
@@ -78,8 +82,8 @@ hooks left by older versions, leaving your own untouched).
 Pick **one** of the two routes below. Either way, on first load tmux-nudge sets
 up the renderer **and auto-wires the shell + Claude Code + Kiro CLI
 integrations** for whatever you have installed — idempotently, backing up each
-file it edits (`*.nudge-bak-*`), appending to your existing hooks rather than
-overwriting them.
+file it edits (`*.nudge-bak-*`, `*.agent-hook-bak-*`), appending to your existing
+hooks rather than overwriting them. The agent hooks need `jq`.
 
 ### Option A — TPM (recommended)
 
@@ -149,12 +153,13 @@ set -g @nudge-interval     0.5   # blink speed, seconds per phase
 set -g @nudge-window-blink on    # also blink the window's status-bar entry (off to disable)
 set -g @nudge-min-seconds  15    # shell trigger: only nudge for commands longer than this
 
-# when a nudge clears:
-#   focus       — as soon as you look at (focus) the pane   [default]
-#   interaction — only when you engage the pane (AI reply / next shell command),
-#                 so switching to a window with several nudges shows them all
-#                 until you handle each
-set -g @nudge-clear-mode   focus
+# when a nudge clears (a shared setting, so every plugin using the agent hook agrees):
+#   focus  — as soon as you look at (focus) the pane   [default]
+#   prompt — only when you engage the pane (your next prompt / shell command),
+#            so switching to a window with several nudges shows them all
+#            until you handle each
+set -g @agent-seen-on focus
+# (the older `@nudge-clear-mode focus|interaction` still works when this isn't set)
 ```
 
 Any option can also be overridden per-invocation with the matching `NUDGE_*`
@@ -163,44 +168,45 @@ tmux config reload), since it's baked into the border format at init.
 
 ## AI harness integration
 
-Any terminal AI harness that can run a command on a lifecycle event can drive
-tmux-nudge — the integration point is a single, harness-neutral command:
+**Claude Code and Kiro CLI** report through the shared harnessed-ai hook,
+`scripts/agent-hook.sh`, which writes the pane's `@agent_state`. nudge doesn't
+install hooks of its own: it registers as a listener (`@agent-on-change-nudge`)
+and redraws the pane whenever that state changes.
+
+| Agent state | When | Nudge |
+| --- | --- | --- |
+| waiting (`blocked`) | a permission prompt or question | `needs-input` (orange) |
+| `done` | the agent finished a turn | `done` (green) |
+| `error` | the turn failed | `error` (red) |
+| busy / idle | working, or you replied | cleared |
+
+Other tmux plugins can use the same hook (each ships an identical copy) and read
+the same state. nudge works the same alone or alongside them. With several
+installed, each agent event still runs **one** hook: it's registered once per
+event, a copy is never replaced by an older one, and uninstalling one plugin hands
+the hook to another that's still loaded instead of removing it. When you look at
+a finished agent, it's marked seen in the shared state (`agent-hook.sh --seen`),
+so every plugin clears it together. A waiting agent's
+label is dismissed when you look at it, but the agent stays *waiting* until you
+answer.
+
+Upgrading from an older tmux-nudge: the first load after the update re-runs the
+installer once, which removes the old `nudge hook …` entries from Claude Code and
+Kiro and registers the shared hook. `nudge claude-config` / `nudge kiro-config`
+print the equivalent config for manual setup.
+
+**Codex and other harnesses** (aider, gemini-cli, opencode, …) can still drive
+nudge directly with the harness-neutral command:
 
 ```sh
 nudge hook <needs-input|done|error|clear>
 ```
 
 It finds the agent's pane from `$TMUX_PANE`, ignores any payload the harness
-appends (JSON on stdin or argv), and **never exits non-zero** (a failing Claude
-`Stop` hook would otherwise block Claude). Focusing the pane also auto-clears it.
-
-Adding a harness = pointing its event config at `nudge hook <state>`. No new
-code. Config generators print ready-to-paste snippets with absolute paths:
-
-**Claude Code** — `nudge claude-config` → `~/.claude/settings.json`
-
-| Claude event | Fires when | → |
-| --- | --- | --- |
-| `Stop` | Claude finishes a turn | `needs-input` |
-| `Notification` (`permission_prompt`\|`idle_prompt`) | Claude blocked/waiting | `needs-input` |
-| `UserPromptSubmit` | you send a prompt | `clear` |
-
-**Codex (OpenAI)** — `nudge codex-config` → `~/.codex/config.toml`
-(Codex emits `agent-turn-complete` → `needs-input`; clears on focus.)
-
-**Kiro CLI** — `nudge kiro-config` → your Kiro agent configuration file
-(under the `"hooks"` key; see [Kiro CLI hooks](https://kiro.dev/docs/cli/hooks/)).
-
-| Kiro event | Fires when | → |
-| --- | --- | --- |
-| `stop` | agent finishes a turn | `needs-input` |
-| `userPromptSubmit` | you send a prompt | `clear` |
-
-**Any other harness** (aider, gemini-cli, opencode, …): register a shell
-command / hook that runs `<path>/bin/nudge hook needs-input` on turn-complete
-(and `… clear` on prompt-submit, if the harness exposes it). This applies to
-CLI harnesses running **inside tmux**; a GUI IDE not in a tmux pane is out of
-scope.
+appends (JSON on stdin or argv), and **never exits non-zero**. For Codex,
+`nudge codex-config` prints the `notify` line for `~/.codex/config.toml`
+(`agent-turn-complete` → `needs-input`; clears on focus). This applies to CLI
+harnesses running **inside tmux**; a GUI IDE not in a tmux pane is out of scope.
 
 ## Any long-running command (generic)
 
@@ -214,8 +220,12 @@ eval "$(/path/to/tmux-nudge/bin/nudge shell-init)"
 
 When a command runs longer than `$NUDGE_MIN_SECONDS` (default 15) it nudges its
 pane on completion — **success → done (green), failure → error (red)** — but
-only if you've **switched away** from that pane (`--if-away`), so it never nags
-a pane you're watching. Focus the pane to clear it.
+only if you've **switched away** from that pane, so it never nags a pane you're
+watching. Focus the pane to clear it.
+
+It also publishes the finished command in the shared state (`@agent_tool shell`,
+named after the command), so plugins that list agents can show it too. It's
+cleared once you've looked at it or start the next command.
 
 ### Feasibility spikes
 

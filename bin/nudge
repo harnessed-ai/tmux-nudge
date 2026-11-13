@@ -13,6 +13,12 @@
 #   nudge off  [-t pane]             clear a pane
 #   nudge daemon [-i seconds]        the pulse loop (singleton; auto-exits when idle)
 #   nudge status                     list currently-nudging panes
+#   nudge sync -t pane               redraw a pane from its shared @agent_state
+#                                    (registered as the @agent-on-change-nudge listener)
+#
+# AI agents report through the shared harnessed-ai hook (scripts/agent-hook.sh), which
+# writes @agent_state on the pane; nudge only renders it. Other plugins can use the same
+# hook, so with several installed each agent event still runs one hook.
 #
 set -euo pipefail
 
@@ -25,6 +31,8 @@ tmux() {
 
 # Resolve absolute path to this script so hooks/daemon can re-invoke it.
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+REPO="$(dirname "$(dirname "$SELF")")"
+AGENT_HOOK="$REPO/scripts/agent-hook.sh"
 
 # Read a global tmux user option, falling back to a default. Lets users
 # customise every colour/label/timing via `set -g @nudge-… …` in tmux.conf.
@@ -62,6 +70,27 @@ window_blink_enabled() { [ "$(opt @nudge-window-blink on)" != off ]; }
 # path varies between contexts) so ensure_daemon reliably finds a live daemon.
 daemon_pid() { tmux show -gv @nudge_daemon_pid 2>/dev/null || true; }
 
+# When a finished pane counts as seen: the shared @agent-seen-on (focus | prompt), else
+# the older @nudge-clear-mode (focus | interaction), else focus.
+seen_mode() {
+  local m; m="$(opt @agent-seen-on "")"
+  if [ -z "$m" ]; then
+    case "$(opt @nudge-clear-mode focus)" in interaction) m=prompt ;; *) m=focus ;; esac
+  fi
+  echo "$m"
+}
+
+# You are looking at a nudging pane: a finished agent becomes seen (shared state, so
+# other plugins agree), and the label goes. Waiting/error agents keep their state —
+# they still need you — but their label is dismissed.
+seen_pane() {
+  local st; st="$(tmux display-message -p -t "$1" '#{@agent_state}' 2>/dev/null || true)"
+  if [ "$st" = done ] && [ -f "$AGENT_HOOK" ]; then
+    bash "$AGENT_HOOK" --seen "$1" 2>/dev/null || true
+  fi
+  cmd_off -t "$1"
+}
+
 active_count() {
   tmux list-panes -a -F '#{@nudge_state}' 2>/dev/null | grep -c . || true
 }
@@ -91,6 +120,58 @@ cmd_init() {
   # Note: auto-clear is handled by the daemon (it clears any nudging pane you're
   # actually viewing), not by select-pane hooks — that also works for mouse
   # clicks, which don't reliably fire those hooks.
+
+  # Shared agent state: redraw whenever agent-hook.sh changes a pane's @agent_state,
+  # and advertise our copy of the hook so a sibling plugin's uninstall can hand over.
+  tmux set -g @agent-on-change-nudge "$SELF sync -t"
+  tmux set -g @agent-hook-provider-nudge "$AGENT_HOOK"
+}
+
+# Redraw one pane from the shared @agent_state:
+#   blocked → needs-input (orange)   error → error (red)   done → done (green)
+#   anything else (working, idle, gone) → clear
+cmd_sync() {
+  local pane=""
+  while [ $# -gt 0 ]; do case "$1" in -t) pane="$2"; shift 2 ;; *) pane="${pane:-$1}"; shift ;; esac; done
+  [ -n "$pane" ] || return 0
+  local st; st="$(tmux display-message -p -t "$pane" '#{@agent_state}' 2>/dev/null || true)"
+  case "$st" in
+    blocked) cmd_on -t "$pane" -s needs-input ;;
+    error)   cmd_on -t "$pane" -s error ;;
+    done)    cmd_on -t "$pane" -s done ;;
+    *)       [ -z "$(tmux show -pqv -t "$pane" @nudge_state 2>/dev/null)" ] || cmd_off -t "$pane" ;;
+  esac
+}
+
+# Shell trigger: a long command finished (state done|error) while you were away. Besides
+# the nudge, publish it in the shared state (as a "shell" agent named after the command)
+# so plugins that list agents can show it.
+cmd_shell_done() {
+  local pane="" state="done" name=""
+  while [ $# -gt 0 ]; do
+    case "$1" in -t) pane="$2"; shift 2 ;; -s) state="$2"; shift 2 ;; -n) name="$2"; shift 2 ;; *) shift ;; esac
+  done
+  [ -n "$pane" ] || return 0
+  local viewed
+  viewed="$(tmux display-message -p -t "$pane" \
+    '#{&&:#{&&:#{pane_active},#{window_active}},#{session_attached}}' 2>/dev/null || echo 0)"
+  [ "$viewed" = 1 ] && return 0
+  [ "${#name}" -le 40 ] || name="${name:0:39}…"
+  tmux set -p -t "$pane" @agent_tool shell \; set -p -t "$pane" @agent_state "$state" \; \
+    set -p -t "$pane" @agent_state_since "$(date +%s)" \; set -p -t "$pane" @agent_name "${name:-command}"
+  cmd_on -t "$pane" -s "$state"
+}
+
+# Shell trigger: you started a new command in the pane — the last one is no longer news.
+cmd_shell_start() {
+  local pane=""
+  while [ $# -gt 0 ]; do case "$1" in -t) pane="$2"; shift 2 ;; *) shift ;; esac; done
+  [ -n "$pane" ] || return 0
+  if [ "$(tmux show -pqv -t "$pane" @agent_tool 2>/dev/null)" = shell ]; then
+    tmux set -pu -t "$pane" @agent_tool \; set -pu -t "$pane" @agent_state \; \
+      set -pu -t "$pane" @agent_state_since \; set -pu -t "$pane" @agent_name
+  fi
+  [ -z "$(tmux show -pqv -t "$pane" @nudge_state 2>/dev/null)" ] || cmd_off -t "$pane"
 }
 
 cmd_on() {
@@ -191,9 +272,9 @@ cmd_daemon() {
     # clicks, keyboard selection, and window switches alike. In interaction mode
     # a pane clears only when you engage it (AI reply / next shell command), so
     # switching to a window doesn't dismiss the nudges you haven't handled yet.
-    if [ "$(opt @nudge-clear-mode focus)" = focus ]; then
+    if [ "$(seen_mode)" = focus ]; then
       while read -r pid; do
-        [ -n "$pid" ] && cmd_off -t "$pid"
+        [ -n "$pid" ] && seen_pane "$pid"
       done < <(tmux list-panes -a -F \
         '#{?#{@nudge_state},#{?#{&&:#{&&:#{pane_active},#{window_active}},#{session_attached}},#{pane_id},},}' \
         2>/dev/null | grep -v '^$' || true)
@@ -267,6 +348,12 @@ cmd_uninstall() {
       | while read -r idx; do tmux set-hook -gu "${name}[$idx]" 2>/dev/null || true; done || true
   done
 
+  # 6) Stop listening to the shared agent state, and stop providing the agent hook: if
+  #    another plugin using the hook is loaded, the hook is handed over to its copy;
+  #    otherwise it is removed from Claude Code / Kiro.
+  tmux set -gu @agent-on-change-nudge 2>/dev/null || true
+  bash "$REPO/scripts/uninstall-hooks.sh" --provider nudge || true
+
   tmux refresh-client 2>/dev/null || true
   echo "tmux-nudge uninstalled."
 }
@@ -292,21 +379,15 @@ cmd_hook() {
 
 # Print a ready-to-paste Claude Code hooks block for ~/.claude/settings.json.
 cmd_claude_config() {
-  cat <<JSON
-{
-  "hooks": {
-    "Stop": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "$SELF hook needs-input" } ] }
-    ],
-    "Notification": [
-      { "matcher": "permission_prompt|idle_prompt", "hooks": [ { "type": "command", "command": "$SELF hook needs-input" } ] }
-    ],
-    "UserPromptSubmit": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "$SELF hook clear" } ] }
-    ]
-  }
-}
-JSON
+  local events="SessionStart UserPromptSubmit PreToolUse PostToolUse PermissionRequest Notification Stop SessionEnd"
+  local e first=1
+  echo '{'; echo '  "hooks": {'
+  for e in $events; do
+    [ "$first" = 1 ] || echo ','
+    first=0
+    printf '    "%s": [ { "hooks": [ { "type": "command", "command": "bash \\"%s\\" claude %s" } ] } ]' "$e" "$AGENT_HOOK" "$e"
+  done
+  echo; echo '  }'; echo '}'
 }
 
 # Print a ready-to-paste Codex notify line for ~/.codex/config.toml. Codex only
@@ -325,18 +406,15 @@ TOML
 # `userPromptSubmit` when you reply (→ clear); it sends the event JSON on stdin,
 # which `nudge hook` ignores.
 cmd_kiro_config() {
-  cat <<JSON
-{
-  "hooks": {
-    "stop": [
-      { "command": "$SELF hook needs-input" }
-    ],
-    "userPromptSubmit": [
-      { "command": "$SELF hook clear" }
-    ]
-  }
-}
-JSON
+  local events="agentSpawn userPromptSubmit preToolUse postToolUse stop"
+  local e first=1
+  echo '{'; echo '  "hooks": {'
+  for e in $events; do
+    [ "$first" = 1 ] || echo ','
+    first=0
+    printf '    "%s": [ { "command": "bash \\"%s\\" kiro %s" } ]' "$e" "$AGENT_HOOK" "$e"
+  done
+  echo; echo '  }'; echo '}'
 }
 
 # Print the line to add to ~/.zshrc or ~/.bashrc to enable the generic
@@ -360,13 +438,16 @@ main() {
     ensure-daemon) ensure_daemon ;;
     status)        cmd_status "$@" ;;
     hook)          cmd_hook "$@" ;;
+    sync)          cmd_sync "$@" ;;
+    shell-done)    cmd_shell_done "$@" ;;
+    shell-start)   cmd_shell_start "$@" ;;
     uninstall)     cmd_uninstall ;;
     install)       cmd_install ;;
     claude-config) cmd_claude_config ;;
     codex-config)  cmd_codex_config ;;
     kiro-config)   cmd_kiro_config ;;
     shell-init)    cmd_shell_init ;;
-    *) echo "usage: nudge {init | install | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | daemon [-i sec] | status | claude-config | codex-config | kiro-config | shell-init}" ;;
+    *) echo "usage: nudge {init | install | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | sync -t pane | daemon [-i sec] | status | claude-config | codex-config | kiro-config | shell-init}" ;;
   esac
 }
 main "$@"

@@ -35,13 +35,15 @@ unset _nudge_self
 
 _nudge_preexec() {
   _NUDGE_START=$SECONDS
-  # Running a command in a flagged pane clears its nudge — you're engaging it.
-  # Mode-independent (so it works even if @nudge-clear-mode changes mid-session):
-  # in focus mode the pane is usually already cleared by the daemon (no-op); in
-  # interaction mode this is how shell panes clear. Only acts if actually flagged.
+  _NUDGE_CMD="${1:-}"
+  # Running a command in a flagged pane clears its nudge — you're engaging it — and
+  # drops the last command from the shared agent state. Mode-independent (so it works even
+  # if the seen mode changes mid-session): in focus mode the pane is usually already
+  # cleared by the daemon (no-op); in prompt/interaction mode this is how shell panes
+  # clear. Only acts if actually flagged (one tmux call to check).
   if [ -n "${TMUX_PANE:-}" ] && \
-     [ -n "$(_nudge_tmux show -pqv -t "$TMUX_PANE" @nudge_state 2>/dev/null)" ]; then
-    ( "$_NUDGE_BIN" off -t "$TMUX_PANE" >/dev/null 2>&1 & )
+     [ -n "$(_nudge_tmux display-message -p -t "$TMUX_PANE" '#{@nudge_state}#{?#{==:#{@agent_tool},shell},shell,}' 2>/dev/null)" ]; then
+    ( "$_NUDGE_BIN" shell-start -t "$TMUX_PANE" >/dev/null 2>&1 & )
   fi
 }
 
@@ -55,8 +57,10 @@ _nudge_precmd() {
   local state=done
   [ "$exit" -eq 0 ] || state=error
   # Run detached in a subshell so the interactive shell doesn't print job-control
-  # notices ([1] 12345 … done) into the pane.
-  ( "$_NUDGE_BIN" on -t "$TMUX_PANE" -s "$state" --if-away >/dev/null 2>&1 & )
+  # notices ([1] 12345 … done) into the pane. shell-done nudges only if you're away,
+  # and also publishes the command in the shared agent state (as a "shell" agent).
+  local cmd="${_NUDGE_CMD:-}"; cmd="${cmd%%$'\n'*}"
+  ( "$_NUDGE_BIN" shell-done -t "$TMUX_PANE" -s "$state" -n "$cmd" >/dev/null 2>&1 & )
 }
 
 if [ -n "${ZSH_VERSION:-}" ]; then
@@ -74,7 +78,7 @@ elif [ -n "${BASH_VERSION:-}" ]; then
   _nudge_bash_preexec() {
     [ -n "${COMP_LINE:-}" ] && return           # skip completion
     [ "${BASH_COMMAND}" = "${PROMPT_COMMAND:-}" ] && return
-    [ -z "${_NUDGE_START:-}" ] && _NUDGE_START=$SECONDS
+    [ -z "${_NUDGE_START:-}" ] && { _NUDGE_START=$SECONDS; _NUDGE_CMD="$BASH_COMMAND"; }
   }
   trap '_nudge_bash_preexec' DEBUG
   case ";${PROMPT_COMMAND:-};" in
