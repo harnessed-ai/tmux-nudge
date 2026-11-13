@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-hook-version: 3
+# agent-hook-version: 4
 # agent-hook.sh <tool> [event]
 # agent-hook.sh --seen <pane>
 #
@@ -12,7 +12,9 @@
 #   @agent_state_since epoch seconds of the last state change
 #   @agent_name        session name the agent reports (Claude: /rename)
 #   @agent_activity    short "what it's doing" (e.g. "Bash: npm test")
-#   @agent_session_id  the agent's conversation id
+#   @agent_session_id  the agent's conversation id, set once it has something to resume
+#                      (your first prompt, or a resumed session), so session-restore
+#                      plugins can relaunch it
 #   @agent_pid         pid of the agent CLI (lets readers drop state left by a crash)
 #
 # Register it for every lifecycle event of the agent. The event comes from the hook
@@ -70,7 +72,7 @@ json="$(cat)"
 [ -n "$json" ] || json='{}'
 
 # One jq pass pulls everything we might need, \x1f-separated.
-IFS=$'\x1f' read -r ev session_id transcript ntype activity < <(
+IFS=$'\x1f' read -r ev session_id transcript ntype source activity < <(
 	printf '%s' "$json" | jq -rj '
 		def short: tostring | split("\n")[0] | if length > 60 then .[0:59] + "…" else . end;
 		(.tool_input // {}) as $i
@@ -87,6 +89,7 @@ IFS=$'\x1f' read -r ev session_id transcript ntype activity < <(
 		    (.session_id // ""),
 		    (.transcript_path // ""),
 		    (.notification_type // ""),
+		    (.source // ""),
 		    ( if (.tool_name // "") == "" then ""
 		      elif $arg == "" then .tool_name
 		      else "\(.tool_name): \($arg)" end ) ]
@@ -111,7 +114,7 @@ watched() {
 
 # The agent CLI process this hook belongs to: the nearest ancestor named like the tool.
 find_cli_pid() {
-	local re pid info ppid comm name
+	local re pid info ppid comm name args a words
 	case "$tool" in
 		claude) re='^claude$' ;;
 		kiro)   re='^kiro-cli(-chat)?$' ;;
@@ -125,7 +128,13 @@ find_cli_pid() {
 		read -r ppid comm <<< "$info"
 		name="${comm##*/}"
 		if ! [[ "${name#-}" =~ $re ]]; then
-			name="$(ps -o args= -p "$pid" 2>/dev/null)"; name="${name%% *}"; name="${name##*/}"
+			args="$(ps -o args= -p "$pid" 2>/dev/null)"
+			name="${args%% *}"; name="${name##*/}"
+			case "$name" in
+				node|bun|deno) # the CLI is a script: match the first non-option argument
+					read -ra words <<< "$args"
+					for a in "${words[@]:1}"; do case "$a" in -*) ;; *) name="${a##*/}"; break ;; esac; done ;;
+			esac
 		fi
 		if [[ "${name#-}" =~ $re ]]; then printf '%s' "$pid"; return; fi
 		pid="$ppid"
@@ -149,11 +158,13 @@ set_state() {
 		new_state="$1"
 	fi
 }
-identify() {
-	# Who's in this pane — done on session start / prompt, not on every tool call.
+identify() { # identify [with-session]
+	# Who's in this pane — done on session start / prompt, not on every tool call. The
+	# session id is only recorded once there is a conversation to resume ("with-session"),
+	# so a restore never tries to resume an empty session.
 	local pid name
 	set_opt @agent_tool "$tool"
-	[ -n "$session_id" ] && set_opt @agent_session_id "$session_id"
+	[ "${1:-}" = with-session ] && [ -n "$session_id" ] && set_opt @agent_session_id "$session_id"
 	pid="$(find_cli_pid)"
 	if [ -n "$pid" ]; then
 		# A one-shot run inside the pane (claude -p from the Bash tool, --bg) fires the same
@@ -176,12 +187,12 @@ foreign() {
 
 case "$event" in
 	sessionstart|agentspawn)
-		identify
+		if [ "$source" = resume ]; then identify with-session; else identify; fi
 		set_state idle
 		unset_opt @agent_activity
 		;;
 	userpromptsubmit)
-		identify
+		identify with-session
 		set_state working
 		unset_opt @agent_activity
 		;;
