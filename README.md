@@ -194,6 +194,10 @@ answer.
 
 **Codex ignores a new hook until you approve it once:** run `codex`, open `/hooks`,
 and approve. The fixed path means that approval survives later updates.
+Codex (0.169+) normally runs sessions in a shared background server, so the hook finds
+the pane by matching the session's folder to a pane running Codex; with two Codex
+sessions in one folder it can't tell which. For exact tracking run
+`alias codex='codex --no-daemon'`.
 
 Upgrading from an older tmux-nudge: the first load after the update re-runs the
 installer once, which removes the old `nudge hook …` entries from Claude Code and
