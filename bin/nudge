@@ -33,6 +33,8 @@ tmux() {
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 REPO="$(dirname "$(dirname "$SELF")")"
 AGENT_HOOK="$REPO/scripts/agent-hook.sh"
+# Where install-hooks.sh installs the shared copy every CLI's config points at.
+SHARED_HOOK="${AGENT_HOOK_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/harnessed-ai}/agent-hook.sh"
 
 # Read a global tmux user option, falling back to a default. Lets users
 # customise every colour/label/timing via `set -g @nudge-… …` in tmux.conf.
@@ -385,20 +387,23 @@ cmd_claude_config() {
   for e in $events; do
     [ "$first" = 1 ] || echo ','
     first=0
-    printf '    "%s": [ { "hooks": [ { "type": "command", "command": "bash \\"%s\\" claude %s" } ] } ]' "$e" "$AGENT_HOOK" "$e"
+    printf '    "%s": [ { "hooks": [ { "type": "command", "command": "bash \\"%s\\" claude %s" } ] } ]' "$e" "$SHARED_HOOK" "$e"
   done
   echo; echo '  }'; echo '}'
 }
 
-# Print a ready-to-paste Codex notify line for ~/.codex/config.toml. Codex only
-# emits agent-turn-complete today, so it maps to "needs-input" (your turn); the
-# nudge clears when you focus the pane. Codex appends the event JSON as an extra
-# arg, which `nudge hook` ignores.
+# Print the Codex hooks.json entries for the shared agent hook (what `nudge install` writes
+# to ~/.codex/hooks.json). Codex ignores new hooks until you approve them once in /hooks.
 cmd_codex_config() {
-  cat <<TOML
-# ~/.codex/config.toml
-notify = ["$SELF", "hook", "needs-input"]
-TOML
+  local events="SessionStart UserPromptSubmit PreToolUse PermissionRequest PostToolUse Stop SessionEnd"
+  local e first=1
+  echo '{'; echo '  "hooks": {'
+  for e in $events; do
+    [ "$first" = 1 ] || echo ','
+    first=0
+    printf '    "%s": [ { "hooks": [ { "type": "command", "command": "bash \\"%s\\" codex %s" } ] } ]' "$e" "$SHARED_HOOK" "$e"
+  done
+  echo; echo '  }'; echo '}'
 }
 
 # Print a ready-to-paste hooks block for a Kiro CLI agent configuration file.
@@ -412,7 +417,7 @@ cmd_kiro_config() {
   for e in $events; do
     [ "$first" = 1 ] || echo ','
     first=0
-    printf '    "%s": [ { "command": "bash \\"%s\\" kiro %s" } ]' "$e" "$AGENT_HOOK" "$e"
+    printf '    "%s": [ { "command": "bash \\"%s\\" kiro %s" } ]' "$e" "$SHARED_HOOK" "$e"
   done
   echo; echo '  }'; echo '}'
 }

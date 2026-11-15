@@ -80,4 +80,13 @@ else
   echo "  agents: jq not found — skipping agent hooks (brew install jq, then: nudge install)"
 fi
 
+# Codex now reports through the shared agent hook (~/.codex/hooks.json, above). An older
+# hand-pasted `notify = [".../nudge", "hook", ...]` line would nudge a second time, in the
+# wrong colour; it's your file, so just point it out.
+codex_toml="${CODEX_HOME:-$HOME/.codex}/config.toml"
+if [ -f "$codex_toml" ] && grep -qE '^[[:space:]]*notify[[:space:]]*=.*nudge.*hook' "$codex_toml"; then
+  echo "  codex: remove the old 'notify = [... nudge hook ...]' line from $codex_toml —"
+  echo "         Codex now reports through the shared agent hook (approve it once in /hooks)."
+fi
+
 echo "tmux-nudge integrations installed (pointing at $REPO)."

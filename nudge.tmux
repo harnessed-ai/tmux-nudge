@@ -13,9 +13,10 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Wire the integrations once. Backgrounded so tmux startup never blocks; a stamp
 # file keeps it from re-running on every start. The stamp is versioned: bumping it makes
-# existing installs re-run once (v2: move AI agents onto the shared agent-hook.sh).
+# existing installs re-run once (v2: move AI agents onto the shared agent-hook.sh;
+# v3: the hook at its fixed path, plus Codex and OpenCode).
 auto="$(tmux show -gv @nudge-auto-install 2>/dev/null || echo on)"
-STAMP="$CURRENT_DIR/.nudge-installed-v2"
+STAMP="$CURRENT_DIR/.nudge-installed-v3"
 if [ "$auto" != "off" ] && [ ! -f "$STAMP" ]; then
   tmux run-shell -b "'$CURRENT_DIR/bin/nudge' install >/dev/null 2>&1 && touch '$STAMP'"
 fi

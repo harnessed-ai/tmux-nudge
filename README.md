@@ -29,8 +29,8 @@ no matter what flagged the pane:
 
 | Trigger          | Source                                   | Covers                                 |
 | ---------------- | ---------------------------------------- | -------------------------------------- |
-| AI agents        | the shared `agent-hook.sh` (Claude Code, Kiro) → `nudge sync` | AI agents (waiting / done / error) |
-| Other harnesses  | `nudge hook` (Codex, aider, …)            | AI agents (needs-input / done / error) |
+| AI agents        | the shared `agent-hook.sh` (Claude Code, Codex, OpenCode, Kiro) → `nudge sync` | AI agents (waiting / done / error) |
+| Other harnesses  | `nudge hook` (aider, …)                   | AI agents (needs-input / done / error) |
 | Shell completion | `shell/nudge.sh` precmd (zsh/bash)        | any long-running command               |
 | Manual / scripts | `nudge on`                                | anything                               |
 
@@ -47,7 +47,7 @@ nudge and exits when none remain.
 ## Status
 
 Working end to end on tmux 3.6b: engine + renderer, the shared agent hook (Claude
-Code, Kiro), Codex via `nudge hook`, the generic shell trigger, and safe
+Code, Codex, OpenCode, Kiro), the generic shell trigger, and safe
 install/uninstall. `tests/contract_test.sh` checks it all end to end on an
 isolated tmux server.
 
@@ -168,8 +168,9 @@ tmux config reload), since it's baked into the border format at init.
 
 ## AI harness integration
 
-**Claude Code and Kiro CLI** report through the shared harnessed-ai hook,
-`scripts/agent-hook.sh`, which writes the pane's `@agent_state`. nudge doesn't
+**Claude Code, Codex, OpenCode and Kiro CLI** report through the shared harnessed-ai
+hook, `agent-hook.sh`, which writes the pane's `@agent_state` (OpenCode has no shell
+hooks, so a small plugin translates its events; Kiro has no "waiting" event). nudge doesn't
 install hooks of its own: it registers as a listener (`@agent-on-change-nudge`)
 and redraws the pane whenever that state changes.
 
@@ -182,30 +183,34 @@ and redraws the pane whenever that state changes.
 
 Other tmux plugins can use the same hook (each ships an identical copy) and read
 the same state. nudge works the same alone or alongside them. With several
-installed, each agent event still runs **one** hook: it's registered once per
-event, a copy is never replaced by an older one, and uninstalling one plugin hands
-the hook to another that's still loaded instead of removing it. When you look at
+installed, each agent event still runs **one** hook: it's installed at one fixed
+path (`${XDG_DATA_HOME:-~/.local/share}/harnessed-ai/agent-hook.sh`), registered once
+per event, never replaced by an older version, and only removed when the last plugin
+using it is uninstalled. When you look at
 a finished agent, it's marked seen in the shared state (`agent-hook.sh --seen`),
 so every plugin clears it together. A waiting agent's
 label is dismissed when you look at it, but the agent stays *waiting* until you
 answer.
 
+**Codex ignores a new hook until you approve it once:** run `codex`, open `/hooks`,
+and approve. The fixed path means that approval survives later updates.
+
 Upgrading from an older tmux-nudge: the first load after the update re-runs the
 installer once, which removes the old `nudge hook …` entries from Claude Code and
-Kiro and registers the shared hook. `nudge claude-config` / `nudge kiro-config`
-print the equivalent config for manual setup.
+Kiro and registers the shared hook. If you once pasted a Codex
+`notify = [… nudge hook …]` line into `~/.codex/config.toml`, remove it (the
+installer points it out). `nudge claude-config` / `nudge codex-config` /
+`nudge kiro-config` print the equivalent config for manual setup.
 
-**Codex and other harnesses** (aider, gemini-cli, opencode, …) can still drive
-nudge directly with the harness-neutral command:
+**Other harnesses** (aider, gemini-cli, …) can still drive nudge directly with the
+harness-neutral command:
 
 ```sh
 nudge hook <needs-input|done|error|clear>
 ```
 
 It finds the agent's pane from `$TMUX_PANE`, ignores any payload the harness
-appends (JSON on stdin or argv), and **never exits non-zero**. For Codex,
-`nudge codex-config` prints the `notify` line for `~/.codex/config.toml`
-(`agent-turn-complete` → `needs-input`; clears on focus). This applies to CLI
+appends (JSON on stdin or argv), and **never exits non-zero**. This applies to CLI
 harnesses running **inside tmux**; a GUI IDE not in a tmux pane is out of scope.
 
 ## Any long-running command (generic)

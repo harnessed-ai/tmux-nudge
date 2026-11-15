@@ -13,10 +13,13 @@ fail=0
 
 # Sandbox: everything that could touch your config resolves inside $TMP.
 export HOME="$TMP/home" CLAUDE_CONFIG_DIR="$TMP/home/.claude" AGENT_HOOK_TOOLS=claude
+export XDG_DATA_HOME="$TMP/home/.local/share" XDG_CONFIG_HOME="$TMP/home/.config" CODEX_HOME="$TMP/home/.codex"
+unset AGENT_HOOK_HOME OPENCODE_CONFIG_DIR
 mkdir -p "$HOME" "$CLAUDE_CONFIG_DIR"
 sandboxed() {
 	case "$HOME/" in "$TMP"/*) ;; *) return 1 ;; esac
 	case "$CLAUDE_CONFIG_DIR/" in "$TMP"/*) ;; *) return 1 ;; esac
+	case "$XDG_DATA_HOME/$XDG_CONFIG_HOME/$CODEX_HOME/" in "$TMP"/*) ;; *) return 1 ;; esac
 }
 sandboxed || { echo "refusing to run: not sandboxed"; exit 1; }
 
@@ -137,15 +140,19 @@ cfg="$CLAUDE_CONFIG_DIR/settings.json"
 jq -e '[.. | strings] | index("my-own-hook")' "$cfg" >/dev/null &&
 	echo "  ok   your own hooks kept" || { echo "  FAIL user hook lost"; fail=1; }
 
-echo "uninstall hands the hook to another loaded plugin:"
-mkdir -p "$TMP/sibling"
-sed '2s/.*/# agent-hook-version: 3/' "$HOOK" > "$TMP/sibling/agent-hook.sh"
-t set -g @agent-hook-provider-sibling "$TMP/sibling/agent-hook.sh"
+echo "uninstall:"
+SH="$XDG_DATA_HOME/harnessed-ai/agent-hook.sh"
+[ -x "$SH" ] && [ -z "$(jq -r '[.. | strings | select(contains("agent-hook.sh"))] | map(select(contains($sh) | not)) | .[]' --arg sh "$SH" "$cfg")" ] &&
+	echo "  ok   install put the hook at the shared fixed path and registered that" || { echo "  FAIL not at the fixed path"; fail=1; }
+t set -g @agent-hook-provider-sibling x            # another plugin still using the hook
 sandboxed || { echo "refusing to uninstall: not sandboxed"; exit 1; }
 "$NUDGE" uninstall >/dev/null
-reg="$(jq -r '[.. | strings | select(contains("agent-hook.sh"))][0]' "$cfg")"
-[[ "$reg" == *"$TMP/sibling/agent-hook.sh"* ]] && echo "  ok   hook re-pointed to the other plugin's copy" ||
-	{ echo "  FAIL hook not handed over: $reg"; fail=1; }
+[ "$(jq '[.. | strings | select(contains("agent-hook.sh"))] | length' "$cfg")" = 8 ] && [ -x "$SH" ] &&
+	echo "  ok   another plugin still uses it: hook left in place" || { echo "  FAIL hook removed while in use"; fail=1; }
 [ -z "$(t show -gqv @agent-on-change-nudge)" ] && echo "  ok   listener unregistered" || { echo "  FAIL listener left"; fail=1; }
+t set -gu @agent-hook-provider-sibling
+"$NUDGE" init; env -u AGENT_HOOK_TOOLS "$NUDGE" uninstall >/dev/null   # nudge is the last one using it
+[ "$(jq '[.. | strings | select(contains("agent-hook.sh"))] | length' "$cfg")" = 0 ] && [ ! -e "$SH" ] &&
+	echo "  ok   last plugin out: hook unregistered and removed" || { echo "  FAIL hook left behind"; fail=1; }
 
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }
