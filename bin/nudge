@@ -15,6 +15,9 @@
 #   nudge status                     list currently-nudging panes
 #   nudge sync -t pane               redraw a pane from its shared @agent_state
 #                                    (registered as the @agent-on-change-nudge listener)
+#   nudge elsewhere                  recompute each session's "elsewhere" status chip
+#   nudge next [-c client] [-p pane] jump to the next pane that needs you, any session
+#                                    (bound to prefix + g)
 #
 # AI agents report through the shared harnessed-ai hook (scripts/agent-hook.sh), which
 # writes @agent_state on the pane; nudge only renders it. Other plugins can use the same
@@ -127,6 +130,175 @@ cmd_init() {
   # and advertise our copy of the hook so a sibling plugin's uninstall can hand over.
   tmux set -g @agent-on-change-nudge "$SELF sync -t"
   tmux set -g @agent-hook-provider-nudge "$AGENT_HOOK"
+
+  init_elsewhere
+  init_jump_key
+}
+
+# ---- elsewhere: agents in other sessions --------------------------------------------
+#
+# Each session carries @nudge_elsewhere: a chip for the most urgent pane that needs you in
+# any OTHER session, plus how many more there are ("● infra:2 build +1"). status-right
+# shows the one for the session you're looking at, so each client sees what it's missing.
+# Recomputed on every state change and when sessions/windows come and go.
+
+ELSEWHERE_TOKEN='#{E:@nudge_elsewhere}'
+HOOK_INDEX=4243 # fixed, so reloads replace our hooks instead of stacking them
+
+init_elsewhere() {
+  local mode sr
+  mode="$(opt @nudge-elsewhere on)"
+  sr="$(tmux show -gv status-right 2>/dev/null || true)"
+  if [ "$mode" = on ]; then
+    case "$sr" in
+      *"$ELSEWHERE_TOKEN"*) ;;
+      *)
+        tmux set -g @nudge_saved_sr "$sr"
+        tmux set -g status-right "$ELSEWHERE_TOKEN$sr"
+        ;;
+    esac
+    # Room for the chip in front of your own status-right.
+    local len; len="$(tmux show -gv status-right-length 2>/dev/null || echo 40)"
+    if [ "${len:-40}" -lt 80 ]; then
+      [ -n "$(tmux show -gv @nudge_saved_srl 2>/dev/null || true)" ] || tmux set -g @nudge_saved_srl "$len"
+      tmux set -g status-right-length 80
+    fi
+  else
+    restore_status_right
+  fi
+  if [ "$mode" = off ]; then
+    clear_elsewhere
+  else # on, or manual: you put #{E:@nudge_elsewhere} where you want it
+    local h
+    for h in session-created session-closed session-renamed window-renamed window-linked \
+             window-unlinked pane-exited after-kill-pane; do
+      tmux set-hook -g "${h}[$HOOK_INDEX]" "run-shell -b '$SELF elsewhere'"
+    done
+    cmd_elsewhere
+  fi
+}
+
+restore_status_right() {
+  local sr; sr="$(tmux show -gv status-right 2>/dev/null || true)"
+  case "$sr" in
+    "$ELSEWHERE_TOKEN"*) tmux set -g status-right "${sr#"$ELSEWHERE_TOKEN"}" ;;
+  esac
+  local srl; srl="$(tmux show -gv @nudge_saved_srl 2>/dev/null || true)"
+  [ -n "$srl" ] && tmux set -g status-right-length "$srl"
+  tmux set -gu @nudge_saved_srl 2>/dev/null || true
+  tmux set -gu @nudge_saved_sr 2>/dev/null || true
+}
+
+clear_elsewhere() {
+  local sid
+  for sid in $(tmux list-sessions -F '#{session_id}' 2>/dev/null); do
+    tmux set -u -t "$sid" @nudge_elsewhere 2>/dev/null || true
+  done
+  local h
+  for h in session-created session-closed session-renamed window-renamed window-linked \
+           window-unlinked pane-exited after-kill-pane; do
+    tmux set-hook -gu "${h}[$HOOK_INDEX]" 2>/dev/null || true
+  done
+}
+
+# Every pane that needs you, most urgent first (waiting/error, then done), oldest first:
+#   rank \x1f since \x1f session_id \x1f session \x1f window_index \x1f window \x1f window_id \x1f pane \x1f state
+# A pane needs you while nudge flags it (@nudge_state), or while its agent is still
+# blocked or errored even after you glanced at it.
+needs_you() {
+  local US=$'\x1f'
+  tmux list-panes -a -F "#{session_id}${US}#{session_name}${US}#{window_index}${US}#{window_name}${US}#{window_id}${US}#{pane_id}${US}#{@nudge_state}${US}#{@agent_state}${US}#{@agent_state_since}${US}#{@nudge_since}" 2>/dev/null |
+    awk -F "$US" -v OFS="$US" '{
+      st = $7
+      if (st == "") { if ($8 == "blocked") st = "needs-input"; else if ($8 == "error") st = "error" }
+      if (st == "") next
+      rank = (st == "done") ? 1 : 2
+      since = ($9 != "") ? $9 : (($10 != "") ? $10 : 0)
+      print rank, since, $1, $2, $3, $4, $5, $6, st
+    }' | sort -t "$US" -k1,1nr -k2,2n
+}
+
+glyph_for_state() {
+  case "$1" in done) echo "✓" ;; error) echo "✗" ;; *) echo "●" ;; esac
+}
+
+cmd_elsewhere() {
+  [ "$(opt @nudge-elsewhere on)" = off ] && return 0
+  local US=$'\x1f' list sessions
+  list="$(needs_you)"
+  sessions="$(tmux list-sessions -F '#{session_id}' 2>/dev/null)" || return 0
+  local args=() sid chip line first count rank since lsid sname widx wname wid pane st
+  for sid in $sessions; do
+    first="" count=0
+    while IFS="$US" read -r rank since lsid sname widx wname wid pane st; do
+      [ -n "$lsid" ] && [ "$lsid" != "$sid" ] || continue
+      count=$((count + 1))
+      [ -n "$first" ] || first="$st$US$sname$US$widx$US$wname"
+    done <<< "$list"
+    chip=""
+    if [ -n "$first" ]; then
+      IFS="$US" read -r st sname widx wname <<< "$first"
+      chip="#[fg=$(color_for_state "$st")]$(glyph_for_state "$st") #[fg=default]"
+      chip+="$(fmt_escape "$sname"):$widx $(fmt_escape "$wname")"
+      [ "$count" -gt 1 ] && chip+=" #[fg=colour245]+$((count - 1))"
+      chip+="#[default] "
+    fi
+    [ "${#args[@]}" -gt 0 ] && args+=(\;)
+    if [ -n "$chip" ]; then args+=(set -t "$sid" @nudge_elsewhere "$chip")
+    else args+=(set -u -t "$sid" @nudge_elsewhere); fi
+  done
+  [ "${#args[@]}" -gt 0 ] && tmux "${args[@]}" 2>/dev/null || true
+  tmux refresh-client -S 2>/dev/null || true
+  local client
+  while read -r client; do
+    [ -n "$client" ] && tmux refresh-client -S -t "$client" 2>/dev/null || true
+  done < <(tmux list-clients -F '#{client_name}' 2>/dev/null)
+}
+
+# Names go through #{E:}, so a literal # must be doubled.
+fmt_escape() { printf '%s' "${1//#/##}"; }
+
+# ---- prefix + g: jump to the next pane that needs you -------------------------------
+
+init_jump_key() {
+  local key old
+  key="$(opt @nudge-jump-key g)"
+  old="$(tmux show -gv @nudge_bound_key 2>/dev/null || true)"
+  if [ -n "$old" ] && [ "$old" != "$key" ]; then
+    tmux unbind-key "$old" 2>/dev/null || true
+  fi
+  if [ "$key" = off ] || [ -z "$key" ]; then
+    tmux set -gu @nudge_bound_key 2>/dev/null || true
+    return 0
+  fi
+  tmux bind-key "$key" run-shell -b "'$SELF' next -c '#{client_name}' -p '#{pane_id}'"
+  tmux set -g @nudge_bound_key "$key"
+}
+
+# Go to the next pane that needs you, in any session: the most urgent and oldest first;
+# pressing again moves on from the pane you're on.
+cmd_next() {
+  local client="" here=""
+  while [ $# -gt 0 ]; do
+    case "$1" in -c) client="$2"; shift 2 ;; -p) here="$2"; shift 2 ;; *) shift ;; esac
+  done
+  local US=$'\x1f' list
+  list="$(needs_you)"
+  local cflag=(); [ -n "$client" ] && cflag=(-c "$client")
+  if [ -z "$list" ]; then
+    tmux display-message ${cflag[@]+"${cflag[@]}"} "No agents need you" 2>/dev/null || true
+    return 0
+  fi
+  local panes=() lines=() rank since sid sname widx wname wid pane st
+  while IFS="$US" read -r rank since sid sname widx wname wid pane st; do
+    panes+=("$pane"); lines+=("$sid$US$wid$US$pane")
+  done <<< "$list"
+  local i pick=0
+  for i in "${!panes[@]}"; do
+    if [ "${panes[$i]}" = "$here" ]; then pick=$(( (i + 1) % ${#panes[@]} )); break; fi
+  done
+  IFS="$US" read -r sid wid pane <<< "${lines[$pick]}"
+  tmux switch-client ${cflag[@]+"${cflag[@]}"} -t "$sid" \; select-window -t "$wid" \; select-pane -t "$pane" 2>/dev/null || true
 }
 
 # Redraw one pane from the shared @agent_state:
@@ -141,7 +313,10 @@ cmd_sync() {
     blocked) cmd_on -t "$pane" -s needs-input ;;
     error)   cmd_on -t "$pane" -s error ;;
     done)    cmd_on -t "$pane" -s done ;;
-    *)       [ -z "$(tmux show -pqv -t "$pane" @nudge_state 2>/dev/null)" ] || cmd_off -t "$pane" ;;
+    *)
+      if [ -n "$(tmux show -pqv -t "$pane" @nudge_state 2>/dev/null)" ]; then cmd_off -t "$pane"
+      else cmd_elsewhere; fi
+      ;;
   esac
 }
 
@@ -197,6 +372,8 @@ cmd_on() {
     [ "$viewed" = 1 ] && return 0
   fi
 
+  local prev; prev="$(tmux show -pqv -t "$pane" @nudge_state 2>/dev/null || true)"
+  [ "$prev" = "$state" ] || tmux set -p -t "$pane" @nudge_since "$(date +%s)"
   tmux set -p -t "$pane" @nudge_state "$state"
   tmux set -p -t "$pane" @nudge_color "$(color_for_state "$state")"
   tmux set -p -t "$pane" @nudge_label "$(label_for_state "$state")"
@@ -215,6 +392,7 @@ cmd_on() {
   fi
 
   ensure_daemon
+  cmd_elsewhere
   tmux refresh-client 2>/dev/null || true
 }
 
@@ -233,6 +411,7 @@ cmd_off() {
   tmux set -pu -t "$pane" @nudge_state 2>/dev/null || true
   tmux set -pu -t "$pane" @nudge_color 2>/dev/null || true
   tmux set -pu -t "$pane" @nudge_label 2>/dev/null || true
+  tmux set -pu -t "$pane" @nudge_since 2>/dev/null || true
   tmux set -pu -t "$pane" window-style 2>/dev/null || true
   tmux set -pu -t "$pane" window-active-style 2>/dev/null || true
 
@@ -248,6 +427,7 @@ cmd_off() {
       tmux set -wu -t "$win" window-status-current-style 2>/dev/null || true
     fi
   fi
+  cmd_elsewhere
   tmux refresh-client 2>/dev/null || true
 }
 
@@ -337,9 +517,15 @@ cmd_uninstall() {
   if [ -n "$saved" ]; then tmux set -g pane-border-format "$saved"
   else tmux set -gu pane-border-format 2>/dev/null || true; fi
 
-  # 4) Drop our global options.
+  # 4) Drop our global options, the elsewhere chip (status-right back as it was) and the
+  #    jump key.
   tmux set -gu @nudge_phase 2>/dev/null || true
   tmux set -gu @nudge_saved_pbf 2>/dev/null || true
+  restore_status_right
+  clear_elsewhere
+  local key; key="$(tmux show -gv @nudge_bound_key 2>/dev/null || true)"
+  [ -n "$key" ] && tmux unbind-key "$key" 2>/dev/null || true
+  tmux set -gu @nudge_bound_key 2>/dev/null || true
 
   # 5) Remove ONLY our select-pane/window hooks (matched by our path), by index
   #    high->low so earlier indices stay valid; the user's own hooks survive.
@@ -444,6 +630,8 @@ main() {
     status)        cmd_status "$@" ;;
     hook)          cmd_hook "$@" ;;
     sync)          cmd_sync "$@" ;;
+    elsewhere)     cmd_elsewhere ;;
+    next)          cmd_next "$@" ;;
     shell-done)    cmd_shell_done "$@" ;;
     shell-start)   cmd_shell_start "$@" ;;
     uninstall)     cmd_uninstall ;;
@@ -452,7 +640,7 @@ main() {
     codex-config)  cmd_codex_config ;;
     kiro-config)   cmd_kiro_config ;;
     shell-init)    cmd_shell_init ;;
-    *) echo "usage: nudge {init | install | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | sync -t pane | daemon [-i sec] | status | claude-config | codex-config | kiro-config | shell-init}" ;;
+    *) echo "usage: nudge {init | install | uninstall | on [-t pane] [-s state] [--if-away] | off [-t pane] | hook <state> | sync -t pane | elsewhere | next [-c client] [-p pane] | daemon [-i sec] | status | claude-config | codex-config | kiro-config | shell-init}" ;;
   esac
 }
 main "$@"

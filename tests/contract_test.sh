@@ -121,6 +121,30 @@ expect "$O" @agent_state "" "finished while you're watching it → nothing to re
 bash "$HOOK" --seen "$B"; sleep 0.4
 expect "$B" @agent_tool "" "a seen shell row disappears (no idle leftovers)"
 
+echo "elsewhere chip and prefix + g:"
+case "$(t show -gv status-right)" in '#{E:@nudge_elsewhere}'*) echo "  ok   chip token prepended to status-right" ;;
+	*) echo "  FAIL status-right: $(t show -gv status-right)"; fail=1 ;; esac
+t list-keys -T prefix | grep -q "nudge' next" && echo "  ok   prefix + g bound" || { echo "  FAIL jump key not bound"; fail=1; }
+t new-session -d -s far -n build
+F="$(t display-message -p -t far:build '#{pane_id}')"
+t set -p -t "$F" @agent_tool claude
+ev "$F" PermissionRequest
+t set -p -t "$F" @agent_state_since 1; "$NUDGE" elsewhere   # the oldest one waiting
+chip() { t show -qv -t "$1" @nudge_elsewhere; }
+case "$(chip main)" in *"far:"*build*) echo "  ok   main shows the agent waiting in far" ;; *) echo "  FAIL main chip: '$(chip main)'"; fail=1 ;; esac
+case "$(chip far)" in *"main:"*) echo "  ok   far shows main's waiting agent, not its own" ;; *) echo "  FAIL far chip: '$(chip far)'"; fail=1 ;; esac
+CL="$(t list-clients -F '#{client_name}' | head -1)"
+here() { t list-clients -F '#{pane_id}' | head -1; }   # the client's pane (display -c resolves elsewhere)
+"$NUDGE" next -c "$CL" -p "$(here)"; sleep 0.3
+[ "$(here)" = "$F" ] && echo "  ok   next: jumps across sessions to the oldest waiting agent" ||
+	{ echo "  FAIL next went to $(here)"; fail=1; }
+"$NUDGE" next -c "$CL" -p "$F"; sleep 0.3
+[ "$(here)" = "$A" ] && echo "  ok   next again: moves on to the next one" ||
+	{ echo "  FAIL second next went to $(here)"; fail=1; }
+ev "$F" UserPromptSubmit
+[ -z "$(chip main)" ] && echo "  ok   answered → chip gone" || { echo "  FAIL chip left: '$(chip main)'"; fail=1; }
+t switch-client -c "$CL" -t main:other; t kill-session -t far; sleep 0.3
+
 echo "install migrates old hooks (scratch config):"
 sandboxed || { echo "refusing to install: not sandboxed"; exit 1; }
 cat > "$CLAUDE_CONFIG_DIR/settings.json" <<JSON

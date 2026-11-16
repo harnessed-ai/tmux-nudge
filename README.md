@@ -44,6 +44,24 @@ A small daemon animates the blink and **auto-clears** any flagged pane the momen
 you view it (mouse, keyboard, or window switch alike). It starts on the first
 nudge and exits when none remain.
 
+### Other sessions
+
+The blinking only shows the session you're looking at. When something in **another
+tmux session** needs you, the status bar shows a chip for it, in front of your own
+`status-right`:
+
+```
+ 1:zsh  2:claude                    ● infra:2 build +1   ghostty
+```
+
+That's the most urgent one elsewhere (session `infra`, window `2:build`), coloured by
+its state (waiting before done, oldest first), and `+1` more elsewhere. Each session
+sees the chip for the *other* sessions, so it disappears once you're there.
+
+**`prefix + g`** jumps to the next pane that needs you, in any session, in the same
+order: waiting first, then done, oldest first. Press it again to move on; with nothing
+left it says "No agents need you".
+
 ## Status
 
 Working end to end on tmux 3.6b: engine + renderer, the shared agent hook (Claude
@@ -69,13 +87,19 @@ nudge uninstall                 # fully reverse init; restores your config
 nudge on  [-t pane] [-s state]  # state: needs-input | done | error
 nudge off [-t pane]
 nudge sync -t pane              # redraw a pane from its shared @agent_state
+nudge elsewhere                 # recompute every session's "elsewhere" chip
+nudge next [-c client] [-p pane]  # jump to the next pane that needs you (prefix + g)
 nudge status
 ```
 
 `init` is non-destructive: it saves your `pane-border-format` and composes with
-it (non-nudging panes keep your look), and installs **no** tmux hooks — auto-clear
-is daemon-driven. `uninstall` restores your format exactly (and strips any focus
-hooks left by older versions, leaving your own untouched).
+it (non-nudging panes keep your look), and puts the chip in front of your
+`status-right` (raising `status-right-length` to 80 if it was shorter). Auto-clear is
+daemon-driven; the only tmux hooks it adds keep the chip current when sessions and
+windows come, go or get renamed, at a fixed index (`[4243]`) so your own hooks are
+untouched. `uninstall` restores your format, `status-right` and its length exactly,
+removes those hooks and the key binding (and strips any focus hooks left by older
+versions, leaving your own untouched).
 
 ## Install
 
@@ -152,6 +176,11 @@ set -g @nudge-label-error       "✗ tmux-nudge — error"
 set -g @nudge-interval     0.5   # blink speed, seconds per phase
 set -g @nudge-window-blink on    # also blink the window's status-bar entry (off to disable)
 set -g @nudge-min-seconds  15    # shell trigger: only nudge for commands longer than this
+
+# other sessions (see "Other sessions")
+set -g @nudge-elsewhere    on    # on: chip in front of status-right | manual: you place
+                                 # #{E:@nudge_elsewhere} yourself | off: no chip
+set -g @nudge-jump-key     g     # prefix + key jumps to the next pane needing you (off: none)
 
 # when a nudge clears (a shared setting, so every plugin using the agent hook agrees):
 #   focus  — as soon as you look at (focus) the pane   [default]
