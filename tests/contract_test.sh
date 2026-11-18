@@ -73,11 +73,19 @@ AW="$(t display-message -p -t "$A" '#{window_id}')"
 wopt() { t show -wqv -t "$AW" "$1"; }
 [ "$(wopt @nudge_wglyph)" = "●" ] && [ "$(wopt @nudge_wcolor)" = colour214 ] &&
 	echo "  ok   its window entry gets the ● badge in orange" || { echo "  FAIL badge: '$(wopt @nudge_wglyph)' '$(wopt @nudge_wcolor)'"; fail=1; }
+[ "$(wopt pane-border-style)" = "fg=colour214" ] && echo "  ok   … and the window's borders turn orange" ||
+	{ echo "  FAIL border style: '$(wopt pane-border-style)'"; fail=1; }
 t set -p -t "$A" @agent_activity "Bash: npm test"; "$NUDGE" sync -t "$A"
 expect "$A" @nudge_label "● waiting · fifo · Bash: npm test" "… and what it's waiting on"
 ev "$A" PostToolUse
 expect "$A" @nudge_state "" "busy again → nudge cleared"
-[ -z "$(wopt @nudge_wglyph)" ] && echo "  ok   … and the window badge with it" || { echo "  FAIL badge left: '$(wopt @nudge_wglyph)'"; fail=1; }
+[ -z "$(wopt @nudge_wglyph)" ] && [ -z "$(wopt pane-border-style)" ] && echo "  ok   … and the window badge and border colour with it" ||
+	{ echo "  FAIL badge left: '$(wopt @nudge_wglyph)' '$(wopt pane-border-style)'"; fail=1; }
+[ "$(wopt pane-border-status)" = top ] && echo "  ok   the label line stays (agent window): panes don't resize" ||
+	{ echo "  FAIL label line: '$(wopt pane-border-status)'"; fail=1; }
+OW="$(t display-message -p -t "$O" '#{window_id}')"
+[ -z "$(t show -wqv -t "$OW" pane-border-status)" ] && echo "  ok   a window without agents gets no label line" ||
+	{ echo "  FAIL label line on a window without agents"; fail=1; }
 ev "$A" Stop
 expect "$A" @nudge_state done "finished turn → green done"
 expect "$A" @nudge_label "✓ done · fifo" "done label"

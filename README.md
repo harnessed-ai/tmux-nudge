@@ -36,9 +36,12 @@ no matter what flagged the pane:
 
 A flagged pane is marked two ways, both **per-pane** (no shared-border ambiguity):
 
-- a **blinking label** on the pane's own border row saying what happened and to whom:
-  `● waiting · fifo · Bash: npm test`, `✓ done · fifo`, `✗ error · npm test` (the agent's
-  name, or the command for a finished shell command)
+- a **blinking label chip** on the pane's own border row saying what happened and to
+  whom: `● waiting · fifo · Bash: npm test`, `✓ done · fifo`, `✗ error · npm test` (the
+  agent's name, or the command for a finished shell command). It's filled in the state's
+  colour behind black text, blinking to the same text in that colour
+- the window's **pane borders** turn the state's colour while it has a nudging pane;
+  your active pane keeps its own border colour, so you still see where you are
 - the pane's **window entry** in the status bar gets the state's glyph (` 1:zsh ✓ `)
   and **blinks as a filled block** in the state's colour, readable on any status-bar
   colour — but only while that window is **not** the one you're currently on. A window
@@ -47,6 +50,11 @@ A flagged pane is marked two ways, both **per-pane** (no shared-border ambiguity
 A small daemon animates the blink and **auto-clears** any flagged pane the moment
 you view it (mouse, keyboard, or window switch alike). It starts on the first
 nudge and exits when none remain.
+
+Windows with an agent in them keep their **label row** (tmux's `pane-border-status top`)
+all the time, showing your normal `pane-border-format` until something nudges. Turning
+it on only for a nudge would take a row from the top panes and give it back afterwards,
+resizing them and making agent TUIs redraw. Windows without agents get no extra row.
 
 ### Other sessions
 
@@ -184,6 +192,9 @@ set -g @nudge-interval     0.5   # blink speed, seconds per phase
 set -g @nudge-window-blink on    # blink the window's status-bar entry (off: just its glyph)
 set -g @nudge-window-style filled  # filled: a block in the state's colour behind black
                                    # text | text: the entry's text in that colour
+set -g @nudge-border-color on      # colour the window's pane borders while it nudges
+set -g @nudge-label-line   agents  # agents: label row always on in windows with agents
+                                   # (no resizing) | nudging: only while a pane nudges
 set -g @nudge-min-seconds  15    # shell trigger: only nudge for commands longer than this
 
 # other sessions (see "Other sessions")

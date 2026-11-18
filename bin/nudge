@@ -129,9 +129,13 @@ restore_window_badge() {
   case "$wsf" in *"$WSF_TOKEN"*) tmux set -g window-status-format "${wsf/"$WSF_TOKEN"/}" ;; esac
   tmux set -gu @nudge_saved_wsf 2>/dev/null || true
   local w
-  for w in $(tmux list-windows -a -F '#{window_id}' 2>/dev/null); do
+  local w pbs pbc
+  while read -r w pbs pbc; do
+    [ -n "$w" ] || continue
     tmux set -wu -t "$w" @nudge_wglyph \; set -wu -t "$w" @nudge_wcolor 2>/dev/null || true
-  done
+    if [ "$pbs" = 1 ]; then tmux set -wu -t "$w" pane-border-status \; set -wu -t "$w" @nudge_pbs 2>/dev/null || true; fi
+    if [ "$pbc" = 1 ]; then tmux set -wu -t "$w" pane-border-style \; set -wu -t "$w" @nudge_pbc 2>/dev/null || true; fi
+  done < <(tmux list-windows -a -F '#{window_id} #{?@nudge_pbs,1,0} #{?@nudge_pbc,1,0}' 2>/dev/null)
 }
 
 # Set the window's glyph and colour from its most urgent nudging pane (waiting, then
@@ -144,11 +148,45 @@ refresh_window_badge() {
     if [ "$r" -gt "$rank" ]; then rank=$r; best=$st; fi
   done < <(tmux list-panes -t "$win" -F '#{@nudge_state}' 2>/dev/null)
   if [ -n "$best" ]; then
+    local color; color="$(color_for_state "$best")"
     tmux set -w -t "$win" @nudge_wglyph "$(glyph_for_state "$best")" \; \
-      set -w -t "$win" @nudge_wcolor "$(color_for_state "$best")" 2>/dev/null || true
+      set -w -t "$win" @nudge_wcolor "$color" 2>/dev/null || true
+    # The window's pane borders in that colour too (your active pane keeps its own
+    # border colour, so you still see where you are). tmux draws each border cell with
+    # the style of the pane on its left/top, so one pane alone can't be outlined; the
+    # label chip says which pane it is.
+    if [ "$(opt @nudge-border-color on)" != off ]; then
+      tmux set -w -t "$win" pane-border-style "fg=$color" \; set -w -t "$win" @nudge_pbc 1 2>/dev/null || true
+    fi
   else
     tmux set -wu -t "$win" @nudge_wglyph \; set -wu -t "$win" @nudge_wcolor 2>/dev/null || true
+    if [ -n "$(tmux show -wqv -t "$win" @nudge_pbc 2>/dev/null)" ]; then
+      tmux set -wu -t "$win" pane-border-style \; set -wu -t "$win" @nudge_pbc 2>/dev/null || true
+    fi
   fi
+}
+
+# 2. The label line (pane-border-status top) stays on for every window with an agent in
+# it, not just while something nudges: turning it on and off takes a row from the top
+# panes and gives it back, which resizes them and makes agent TUIs redraw.
+# @nudge-label-line nudging restores the older on-only-while-nudging behaviour. Only
+# windows nudge switched on (@nudge_pbs) are ever switched off again.
+refresh_label_lines() {
+  local mode; mode="$(opt @nudge-label-line agents)"
+  local US=$'\x1f' args=() win want mine cur
+  while IFS="$US" read -r win want mine cur; do
+    [ -n "$win" ] || continue
+    if [ "$want" = 1 ]; then
+      [ "$cur" = top ] || args+=(set -w -t "$win" pane-border-status top \; set -w -t "$win" @nudge_pbs 1 \;)
+    elif [ "$mine" = 1 ]; then
+      args+=(set -wu -t "$win" pane-border-status \; set -wu -t "$win" @nudge_pbs \;)
+    fi
+  done < <(tmux list-panes -a -F "#{window_id}${US}#{@agent_tool}${US}#{@nudge_state}${US}#{@nudge_pbs}${US}#{pane-border-status}" 2>/dev/null |
+    awk -F "$US" -v OFS="$US" -v mode="$mode" '{
+      if (!($1 in seen)) { order[++n] = $1; seen[$1] = 1; mine[$1] = $4; cur[$1] = $5 }
+      if ($3 != "" || (mode != "nudging" && $2 != "")) want[$1] = 1
+    } END { for (i = 1; i <= n; i++) { w = order[i]; print w, (want[w] ? 1 : 0), mine[w], cur[w] } }')
+  [ "${#args[@]}" -gt 0 ] && tmux "${args[@]}" 2>/dev/null || true
 }
 
 # The daemon's pid is tracked in a tmux server option (not a $TMPDIR file, whose
@@ -198,7 +236,9 @@ cmd_init() {
   # panes fall back to the user's saved format (re-expanded via #{E:}).
   local fmt
   fmt='#{?#{@nudge_state},'
-  fmt+='#{?#{==:#{@nudge_phase},1},#[fg=#{@nudge_color}]#[bold]#{@nudge_label},#[fg='"$DIM"']#{@nudge_label}}'
+  # The label is a chip: filled in the state's colour behind black text, blinking to
+  # the same text in that colour.
+  fmt+='#{?#{==:#{@nudge_phase},1},#[bg=#{@nudge_color}]#[fg=black]#[bold] #{@nudge_label} #[default],#[fg=#{@nudge_color}]#[bold] #{@nudge_label} #[default]}'
   fmt+=',#{E:@nudge_saved_pbf}}'
   tmux set -g pane-border-format "$fmt"
 
@@ -212,6 +252,7 @@ cmd_init() {
   tmux set -g @agent-hook-provider-nudge "$AGENT_HOOK"
 
   init_window_badge
+  refresh_label_lines
   init_elsewhere
   init_jump_key
 }
@@ -300,6 +341,7 @@ needs_you() {
 }
 
 cmd_elsewhere() {
+  refresh_label_lines # runs on every state change and session/window hook, like the chip
   [ "$(opt @nudge-elsewhere on)" = off ] && return 0
   local US=$'\x1f' list sessions
   list="$(needs_you)"
@@ -457,7 +499,7 @@ cmd_on() {
 
   # Layer B needs the border label line visible on this pane's window.
   local win; win="$(tmux display-message -p -t "$pane" '#{window_id}')"
-  tmux set -w -t "$win" pane-border-status top
+  refresh_label_lines
 
   # Layer C: the window's entry in the status list gets the state's glyph and, ONLY
   # for the inactive-window style, a filled block — if you're already on this window,
@@ -501,7 +543,6 @@ cmd_off() {
     refresh_window_badge "$win"
     still="$(tmux list-panes -t "$win" -F '#{@nudge_state}' 2>/dev/null | grep -c . || true)"
     if [ "${still:-0}" -eq 0 ]; then
-      tmux set -wu -t "$win" pane-border-status 2>/dev/null || true
       tmux set -wu -t "$win" window-status-style 2>/dev/null || true
       tmux set -wu -t "$win" window-status-current-style 2>/dev/null || true
     fi
