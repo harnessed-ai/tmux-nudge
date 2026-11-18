@@ -42,10 +42,10 @@ A flagged pane is marked two ways, both **per-pane** (no shared-border ambiguity
   colour behind black text, blinking to the same text in that colour
 - the window's **pane borders** turn the state's colour while it has a nudging pane;
   your active pane keeps its own border colour, so you still see where you are
-- the pane's **window entry** in the status bar gets the state's glyph (` 1:zsh ✓ `)
-  and **blinks as a filled block** in the state's colour, readable on any status-bar
-  colour — but only while that window is **not** the one you're currently on. A window
-  with several nudging panes shows the most urgent (waiting, then error, then done)
+- the pane's **window entry** in the status bar **blinks as a filled block** in the
+  state's colour, readable on any status-bar colour — but only while that window is
+  **not** the one you're currently on. A window with several nudging panes shows the
+  most urgent (waiting, then error, then done)
 
 A small daemon animates the blink and **auto-clears** any flagged pane the moment
 you view it (mouse, keyboard, or window switch alike). It starts on the first
@@ -105,8 +105,7 @@ nudge status
 ```
 
 `init` is non-destructive: it saves your `pane-border-format` and composes with
-it (non-nudging panes keep your look), adds the glyph to your `window-status-format`
-(only shown while a window is nudging), and puts the chip in front of your
+it (non-nudging panes keep your look), and puts the chip in front of your
 `status-right` (raising `status-right-length` to 80 if it was shorter). Auto-clear is
 daemon-driven; the only tmux hooks it adds keep the chip current when sessions and
 windows come, go or get renamed, at a fixed index (`[4243]`) so your own hooks are
@@ -189,7 +188,7 @@ set -g @nudge-dim               colour238   # the "off" phase — pick one that
 # set -g @nudge-label-error       "✗ error"
 
 set -g @nudge-interval     0.5   # blink speed, seconds per phase
-set -g @nudge-window-blink on    # blink the window's status-bar entry (off: just its glyph)
+set -g @nudge-window-blink on    # blink the window's status-bar entry (off to disable)
 set -g @nudge-window-style filled  # filled: a block in the state's colour behind black
                                    # text | text: the entry's text in that colour
 set -g @nudge-border-color on      # colour the window's pane borders while it nudges

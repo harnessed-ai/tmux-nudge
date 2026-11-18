@@ -91,9 +91,12 @@ window_blink_enabled() { [ "$(opt @nudge-window-blink on)" != off ]; }
 
 # ---- the window's status-bar entry ---------------------------------------------------
 #
-# A window with a pane that needs you gets a glyph in its entry (" 1:zsh ✓ ") and, while
-# blinking, a filled block in the state's colour behind black text, readable on any
-# status-bar colour. @nudge-window-style text keeps the older coloured-text look.
+# A window with a pane that needs you blinks its entry as a filled block in the state's
+# colour behind black text, readable on any status-bar colour. Your window-status-format
+# is not touched. @nudge-window-style text keeps the older coloured-text look.
+
+# The glyph token an earlier version added to window-status-format (" 1:zsh ✓ "); only
+# looked for now, to take it out again.
 WSF_TOKEN='#{?#{@nudge_wglyph}, #{@nudge_wglyph},}'
 
 # Styles are format-expanded per window, so the condition keeps the window you're on
@@ -113,32 +116,32 @@ window_style_off() {
   fi
 }
 
-# Put the glyph token into your window-status-format (just before its trailing spaces),
-# once; the original is kept for uninstall. The current window's format is left alone.
-init_window_badge() {
-  local wsf trail
-  wsf="$(tmux show -gv window-status-format 2>/dev/null || true)"
-  case "$wsf" in *"$WSF_TOKEN"*) return 0 ;; esac
-  tmux set -g @nudge_saved_wsf "$wsf"
-  trail="${wsf##*[! ]}"
-  tmux set -g window-status-format "${wsf%"$trail"}${WSF_TOKEN}${trail}"
-}
 
-restore_window_badge() {
+# Take the glyph token an earlier version added out of window-status-format, with the
+# per-window glyphs it showed. Run on every init, so an upgrade cleans up after itself.
+drop_window_glyph() {
   local wsf; wsf="$(tmux show -gv window-status-format 2>/dev/null || true)"
   case "$wsf" in *"$WSF_TOKEN"*) tmux set -g window-status-format "${wsf/"$WSF_TOKEN"/}" ;; esac
   tmux set -gu @nudge_saved_wsf 2>/dev/null || true
   local w
+  for w in $(tmux list-windows -a -F '#{?@nudge_wglyph,#{window_id},}' 2>/dev/null); do
+    tmux set -wu -t "$w" @nudge_wglyph 2>/dev/null || true
+  done
+}
+
+# uninstall: everything nudge set on windows, and any leftover glyph token.
+restore_window_badge() {
+  drop_window_glyph
   local w pbs pbc
   while read -r w pbs pbc; do
     [ -n "$w" ] || continue
-    tmux set -wu -t "$w" @nudge_wglyph \; set -wu -t "$w" @nudge_wcolor 2>/dev/null || true
+    tmux set -wu -t "$w" @nudge_wcolor 2>/dev/null || true
     if [ "$pbs" = 1 ]; then tmux set -wu -t "$w" pane-border-status \; set -wu -t "$w" @nudge_pbs 2>/dev/null || true; fi
     if [ "$pbc" = 1 ]; then tmux set -wu -t "$w" pane-border-style \; set -wu -t "$w" @nudge_pbc 2>/dev/null || true; fi
   done < <(tmux list-windows -a -F '#{window_id} #{?@nudge_pbs,1,0} #{?@nudge_pbc,1,0}' 2>/dev/null)
 }
 
-# Set the window's glyph and colour from its most urgent nudging pane (waiting, then
+# Set the window's colour from its most urgent nudging pane (waiting, then
 # error, then done), or clear them when nothing in it is nudging.
 refresh_window_badge() {
   local win="$1" st best="" rank=0 r
@@ -149,8 +152,7 @@ refresh_window_badge() {
   done < <(tmux list-panes -t "$win" -F '#{@nudge_state}' 2>/dev/null)
   if [ -n "$best" ]; then
     local color; color="$(color_for_state "$best")"
-    tmux set -w -t "$win" @nudge_wglyph "$(glyph_for_state "$best")" \; \
-      set -w -t "$win" @nudge_wcolor "$color" 2>/dev/null || true
+    tmux set -w -t "$win" @nudge_wcolor "$color" 2>/dev/null || true
     # The window's pane borders in that colour too (your active pane keeps its own
     # border colour, so you still see where you are). tmux draws each border cell with
     # the style of the pane on its left/top, so one pane alone can't be outlined; the
@@ -159,7 +161,7 @@ refresh_window_badge() {
       tmux set -w -t "$win" pane-border-style "fg=$color" \; set -w -t "$win" @nudge_pbc 1 2>/dev/null || true
     fi
   else
-    tmux set -wu -t "$win" @nudge_wglyph \; set -wu -t "$win" @nudge_wcolor 2>/dev/null || true
+    tmux set -wu -t "$win" @nudge_wcolor 2>/dev/null || true
     if [ -n "$(tmux show -wqv -t "$win" @nudge_pbc 2>/dev/null)" ]; then
       tmux set -wu -t "$win" pane-border-style \; set -wu -t "$win" @nudge_pbc 2>/dev/null || true
     fi
@@ -251,7 +253,7 @@ cmd_init() {
   tmux set -g @agent-on-change-nudge "$SELF sync -t"
   tmux set -g @agent-hook-provider-nudge "$AGENT_HOOK"
 
-  init_window_badge
+  drop_window_glyph
   refresh_label_lines
   init_elsewhere
   init_jump_key
@@ -501,10 +503,10 @@ cmd_on() {
   local win; win="$(tmux display-message -p -t "$pane" '#{window_id}')"
   refresh_label_lines
 
-  # Layer C: the window's entry in the status list gets the state's glyph and, ONLY
-  # for the inactive-window style, a filled block — if you're already on this window,
-  # its entry is left alone (the pane's own label covers that). The daemon blinks it;
-  # @nudge-window-blink off keeps just the glyph.
+  # Layer C: the window's entry in the status list becomes a filled block in the state's
+  # colour, ONLY for the inactive-window style — if you're already on this window, its
+  # entry is left alone (the pane's own label covers that). The daemon blinks it;
+  # @nudge-window-blink off leaves the entry alone.
   refresh_window_badge "$win"
   if window_blink_enabled; then
     local wcolor; wcolor="$(tmux show -wqv -t "$win" @nudge_wcolor 2>/dev/null || true)"

@@ -54,9 +54,12 @@ ev() { # ev <pane> <event> [json] — fire agent-hook.sh as Claude would, in tha
 echo "init:"
 t set -g window-status-format " #I:#W "
 "$NUDGE" init; "$NUDGE" init
-[ "$(t show -gv window-status-format)" = ' #I:#W#{?#{@nudge_wglyph}, #{@nudge_wglyph},} ' ] &&
-	echo "  ok   badge token added to window-status-format once, before its trailing space" ||
+[ "$(t show -gv window-status-format)" = ' #I:#W ' ] && echo "  ok   your window-status-format is left as it is" ||
 	{ echo "  FAIL window-status-format: $(t show -gv window-status-format)"; fail=1; }
+t set -g window-status-format ' #I:#W#{?#{@nudge_wglyph}, #{@nudge_wglyph},} '   # what an earlier version added
+"$NUDGE" init
+[ "$(t show -gv window-status-format)" = ' #I:#W ' ] && echo "  ok   … and a glyph an earlier version added is taken out" ||
+	{ echo "  FAIL old glyph token left: $(t show -gv window-status-format)"; fail=1; }
 [ "$(t show -gv @agent-on-change-nudge)" = "$NUDGE sync -t" ] && echo "  ok   registers as @agent-on-change listener" ||
 	{ echo "  FAIL listener not registered"; fail=1; }
 [ "$(t show -gv @agent-hook-provider-nudge)" = "$HOOK" ] && echo "  ok   advertises its agent-hook copy" ||
@@ -71,16 +74,16 @@ t set -p -t "$A" @agent_name fifo; "$NUDGE" sync -t "$A"
 expect "$A" @nudge_label "● waiting · fifo" "label names the agent, no plugin prefix"
 AW="$(t display-message -p -t "$A" '#{window_id}')"
 wopt() { t show -wqv -t "$AW" "$1"; }
-[ "$(wopt @nudge_wglyph)" = "●" ] && [ "$(wopt @nudge_wcolor)" = colour214 ] &&
-	echo "  ok   its window entry gets the ● badge in orange" || { echo "  FAIL badge: '$(wopt @nudge_wglyph)' '$(wopt @nudge_wcolor)'"; fail=1; }
+[ "$(wopt @nudge_wcolor)" = colour214 ] && [ -z "$(wopt @nudge_wglyph)" ] &&
+	echo "  ok   its window entry is flagged orange (no glyph)" || { echo "  FAIL badge: '$(wopt @nudge_wglyph)' '$(wopt @nudge_wcolor)'"; fail=1; }
 [ "$(wopt pane-border-style)" = "fg=colour214" ] && echo "  ok   … and the window's borders turn orange" ||
 	{ echo "  FAIL border style: '$(wopt pane-border-style)'"; fail=1; }
 t set -p -t "$A" @agent_activity "Bash: npm test"; "$NUDGE" sync -t "$A"
 expect "$A" @nudge_label "● waiting · fifo · Bash: npm test" "… and what it's waiting on"
 ev "$A" PostToolUse
 expect "$A" @nudge_state "" "busy again → nudge cleared"
-[ -z "$(wopt @nudge_wglyph)" ] && [ -z "$(wopt pane-border-style)" ] && echo "  ok   … and the window badge and border colour with it" ||
-	{ echo "  FAIL badge left: '$(wopt @nudge_wglyph)' '$(wopt pane-border-style)'"; fail=1; }
+[ -z "$(wopt @nudge_wcolor)" ] && [ -z "$(wopt pane-border-style)" ] && echo "  ok   … and the window flag and border colour with it" ||
+	{ echo "  FAIL badge left: '$(wopt @nudge_wcolor)' '$(wopt pane-border-style)'"; fail=1; }
 [ "$(wopt pane-border-status)" = top ] && echo "  ok   the label line stays (agent window): panes don't resize" ||
 	{ echo "  FAIL label line: '$(wopt pane-border-status)'"; fail=1; }
 OW="$(t display-message -p -t "$O" '#{window_id}')"
