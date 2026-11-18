@@ -36,9 +36,13 @@ no matter what flagged the pane:
 
 A flagged pane is marked two ways, both **per-pane** (no shared-border ambiguity):
 
-- a **blinking label** on the pane's own border row (`● tmux-nudge — needs you`)
-- the pane's **window entry blinks** in the status bar — but only while that
-  window is **not** the one you're currently on
+- a **blinking label** on the pane's own border row saying what happened and to whom:
+  `● waiting · fifo · Bash: npm test`, `✓ done · fifo`, `✗ error · npm test` (the agent's
+  name, or the command for a finished shell command)
+- the pane's **window entry** in the status bar gets the state's glyph (` 1:zsh ✓ `)
+  and **blinks as a filled block** in the state's colour, readable on any status-bar
+  colour — but only while that window is **not** the one you're currently on. A window
+  with several nudging panes shows the most urgent (waiting, then error, then done)
 
 A small daemon animates the blink and **auto-clears** any flagged pane the moment
 you view it (mouse, keyboard, or window switch alike). It starts on the first
@@ -93,11 +97,12 @@ nudge status
 ```
 
 `init` is non-destructive: it saves your `pane-border-format` and composes with
-it (non-nudging panes keep your look), and puts the chip in front of your
+it (non-nudging panes keep your look), adds the glyph to your `window-status-format`
+(only shown while a window is nudging), and puts the chip in front of your
 `status-right` (raising `status-right-length` to 80 if it was shorter). Auto-clear is
 daemon-driven; the only tmux hooks it adds keep the chip current when sessions and
 windows come, go or get renamed, at a fixed index (`[4243]`) so your own hooks are
-untouched. `uninstall` restores your format, `status-right` and its length exactly,
+untouched. `uninstall` restores your formats, `status-right` and its length exactly,
 removes those hooks and the key binding (and strips any focus hooks left by older
 versions, leaving your own untouched).
 
@@ -168,13 +173,17 @@ set -g @nudge-dim               colour238   # the "off" phase — pick one that
                                             # contrasts with your background,
                                             # or the blink can be invisible
 
-# labels shown on the pane's border row
-set -g @nudge-label-needs-input "● tmux-nudge — needs you"
-set -g @nudge-label-done        "✓ tmux-nudge — done"
-set -g @nudge-label-error       "✗ tmux-nudge — error"
+# labels shown on the pane's border row. Unset, each is built from the agent:
+#   ● waiting · <name> · <what it's waiting on>   ✓ done · <name>   ✗ error · <name>
+# Set one to use your own fixed text instead.
+# set -g @nudge-label-needs-input "● needs you"
+# set -g @nudge-label-done        "✓ done"
+# set -g @nudge-label-error       "✗ error"
 
 set -g @nudge-interval     0.5   # blink speed, seconds per phase
-set -g @nudge-window-blink on    # also blink the window's status-bar entry (off to disable)
+set -g @nudge-window-blink on    # blink the window's status-bar entry (off: just its glyph)
+set -g @nudge-window-style filled  # filled: a block in the state's colour behind black
+                                   # text | text: the entry's text in that colour
 set -g @nudge-min-seconds  15    # shell trigger: only nudge for commands longer than this
 
 # other sessions (see "Other sessions")

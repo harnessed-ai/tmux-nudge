@@ -52,7 +52,11 @@ ev() { # ev <pane> <event> [json] — fire agent-hook.sh as Claude would, in tha
 }
 
 echo "init:"
-"$NUDGE" init
+t set -g window-status-format " #I:#W "
+"$NUDGE" init; "$NUDGE" init
+[ "$(t show -gv window-status-format)" = ' #I:#W#{?#{@nudge_wglyph}, #{@nudge_wglyph},} ' ] &&
+	echo "  ok   badge token added to window-status-format once, before its trailing space" ||
+	{ echo "  FAIL window-status-format: $(t show -gv window-status-format)"; fail=1; }
 [ "$(t show -gv @agent-on-change-nudge)" = "$NUDGE sync -t" ] && echo "  ok   registers as @agent-on-change listener" ||
 	{ echo "  FAIL listener not registered"; fail=1; }
 [ "$(t show -gv @agent-hook-provider-nudge)" = "$HOOK" ] && echo "  ok   advertises its agent-hook copy" ||
@@ -63,10 +67,23 @@ ev "$A" SessionStart
 expect "$A" @nudge_state "" "idle agent: no nudge"
 ev "$A" PermissionRequest
 expect "$A" @nudge_state needs-input "waiting (permission) → orange needs-input"
+t set -p -t "$A" @agent_name fifo; "$NUDGE" sync -t "$A"
+expect "$A" @nudge_label "● waiting · fifo" "label names the agent, no plugin prefix"
+AW="$(t display-message -p -t "$A" '#{window_id}')"
+wopt() { t show -wqv -t "$AW" "$1"; }
+[ "$(wopt @nudge_wglyph)" = "●" ] && [ "$(wopt @nudge_wcolor)" = colour214 ] &&
+	echo "  ok   its window entry gets the ● badge in orange" || { echo "  FAIL badge: '$(wopt @nudge_wglyph)' '$(wopt @nudge_wcolor)'"; fail=1; }
+t set -p -t "$A" @agent_activity "Bash: npm test"; "$NUDGE" sync -t "$A"
+expect "$A" @nudge_label "● waiting · fifo · Bash: npm test" "… and what it's waiting on"
 ev "$A" PostToolUse
 expect "$A" @nudge_state "" "busy again → nudge cleared"
+[ -z "$(wopt @nudge_wglyph)" ] && echo "  ok   … and the window badge with it" || { echo "  FAIL badge left: '$(wopt @nudge_wglyph)'"; fail=1; }
 ev "$A" Stop
 expect "$A" @nudge_state done "finished turn → green done"
+expect "$A" @nudge_label "✓ done · fifo" "done label"
+t set -g @nudge-label-done "finished!"; "$NUDGE" sync -t "$A"
+expect "$A" @nudge_label "finished!" "your own @nudge-label-done wins"
+t set -gu @nudge-label-done
 ev "$A" UserPromptSubmit
 expect "$A" @nudge_state "" "you replied → cleared"
 ev "$A" StopFailure
@@ -174,6 +191,8 @@ sandboxed || { echo "refusing to uninstall: not sandboxed"; exit 1; }
 [ "$(jq '[.. | strings | select(contains("agent-hook.sh"))] | length' "$cfg")" = 8 ] && [ -x "$SH" ] &&
 	echo "  ok   another plugin still uses it: hook left in place" || { echo "  FAIL hook removed while in use"; fail=1; }
 [ -z "$(t show -gqv @agent-on-change-nudge)" ] && echo "  ok   listener unregistered" || { echo "  FAIL listener left"; fail=1; }
+[ "$(t show -gv window-status-format)" = " #I:#W " ] && echo "  ok   window-status-format restored" ||
+	{ echo "  FAIL window-status-format: $(t show -gv window-status-format)"; fail=1; }
 t set -gu @agent-hook-provider-sibling
 "$NUDGE" init; env -u AGENT_HOOK_TOOLS "$NUDGE" uninstall >/dev/null   # nudge is the last one using it
 [ "$(jq '[.. | strings | select(contains("agent-hook.sh"))] | length' "$cfg")" = 0 ] && [ ! -e "$SH" ] &&
